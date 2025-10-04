@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-import os, json, cgi, shutil, re, base64
+import os, json, shutil, re, base64
 from http.server import HTTPServer, SimpleHTTPRequestHandler
+from email.parser import BytesParser
+from email.policy import default as email_default
 
 ROOT = os.getcwd()
-UPLOAD_ROOT = os.path.join(ROOT, 'uploads')
-FEEDBACK_DIR = os.path.join(ROOT, 'feedback')
-DATA_DIR = os.path.join(ROOT, 'data')
-ANIME_JSON = os.path.join(DATA_DIR, 'anime.json')
-COVERS_DIR = os.path.join(ROOT, 'assets', 'covers')
+UPLOAD_ROOT   = os.path.join(ROOT, 'uploads')
+FEEDBACK_DIR  = os.path.join(ROOT, 'feedback')
+DATA_DIR      = os.path.join(ROOT, 'data')
+ANIME_JSON    = os.path.join(DATA_DIR, 'anime.json')
+COVERS_DIR    = os.path.join(ROOT, 'assets', 'covers')
 WIPE_PASSWORD = "789456123Lol"
 
 def safe_name(name: str) -> str:
@@ -47,7 +49,7 @@ DATAURL_RE = re.compile(r"^data:(?P<mime>[\w/+.-]+);base64,(?P<b64>.*)$", re.DOT
 
 def save_cover_from_dataurl(data_url: str, slug: str) -> str:
     """
-    Uloží cover z data URL do assets/covers/<slug>.<ext> a vrátí relativní cestu.
+    Uloží cover z data URL do assets/covers/<slug>.<ext> a vrátí relativní cestu (covers/xxx.ext).
     """
     m = DATAURL_RE.match(data_url.strip())
     if not m:
@@ -59,22 +61,60 @@ def save_cover_from_dataurl(data_url: str, slug: str) -> str:
     except Exception:
         raise ValueError("Invalid base64 in data URL")
 
-    # z MIME → přípona
     ext = {
-        'image/jpeg': 'jpg',
-        'image/jpg': 'jpg',
-        'image/png': 'png',
-        'image/webp': 'webp',
-        'image/gif': 'gif'
+        'image/jpeg': 'jpg', 'image/jpg': 'jpg',
+        'image/png': 'png',  'image/webp': 'webp', 'image/gif': 'gif'
     }.get(mime, 'bin')
 
     fname = f"{safe_name(slug)}.{ext}"
     fpath = os.path.join(COVERS_DIR, fname)
     with open(fpath, "wb") as f:
         f.write(raw)
-    # relativní cesta, kterou dáme do JSONu
     rel = os.path.join("covers", fname).replace("\\", "/")
     return rel
+
+# ---------- Pomocný multipart parser (bez modulu cgi; funguje v Py 3.13) ----------
+def parse_multipart_request(handler):
+    """
+    Vrátí dict { name: value } kde value je:
+      - str pro textová pole (dekódovaná podle charsetu, default utf-8)
+      - bytes pro binární pole (soubory)
+    Pozn.: názvy souborů posíláš zvlášť jako videoName/subsName, takže filename nepotřebujeme.
+    """
+    length = int(handler.headers.get("Content-Length", "0") or "0")
+    body = handler.rfile.read(length) if length > 0 else b""
+
+    ctype = handler.headers.get("Content-Type", "")
+    # vytvoříme pseudo hlavičky pro email parser
+    headers_bytes = f"Content-Type: {ctype}\r\nMIME-Version: 1.0\r\n\r\n".encode("utf-8")
+    msg = BytesParser(policy=email_default).parsebytes(headers_bytes + body)
+
+    fields = {}
+    if msg.is_multipart():
+        for part in msg.iter_parts():
+            # jméno pole z Content-Disposition
+            name = part.get_param('name', header='content-disposition')
+            if not name:
+                continue
+            filename = part.get_filename()
+            payload = part.get_payload(decode=True)  # bytes
+
+            if filename is None:
+                # textové pole: zkusíme dekódovat
+                charset = part.get_content_charset() or 'utf-8'
+                try:
+                    value = payload.decode(charset, errors='ignore')
+                except Exception:
+                    value = payload.decode('utf-8', errors='ignore')
+                fields[name] = value
+            else:
+                # binární pole (soubor)
+                fields[name] = payload
+    else:
+        # fallback: není multipart
+        pass
+
+    return fields
 
 class Handler(SimpleHTTPRequestHandler):
     def end_headers(self):
@@ -108,28 +148,26 @@ class Handler(SimpleHTTPRequestHandler):
 
     # ---------- Upload videí a titulků ----------
     def handle_upload(self):
-        ctype, pdict = cgi.parse_header(self.headers.get("Content-Type", ""))
-        if ctype != "multipart/form-data":
+        if not (self.headers.get("Content-Type","").startswith("multipart/form-data")):
             self.send_error(400, "Content-Type must be multipart/form-data"); return
-        pdict["boundary"] = bytes(pdict.get("boundary", ""), "utf-8")
-        pdict["CONTENT-LENGTH"] = int(self.headers.get("Content-Length", "0"))
-        fields = cgi.parse_multipart(self.rfile, pdict)
 
-        anime     = (fields.get("anime") or [None])[0]
-        episode   = (fields.get("episode") or [None])[0]
-        quality   = (fields.get("quality") or [None])[0]
-        video     = (fields.get("video") or [None])[0]
-        videoName = (fields.get("videoName") or [None])[0]
-        subs      = (fields.get("subs") or [None])[0]
-        subsName  = (fields.get("subsName") or [None])[0]
+        fields = parse_multipart_request(self)
 
-        # normalize text fields (bytes -> str) & sanitize names
-        for var in ["anime","episode","quality","videoName","subsName"]:
-            val = locals().get(var)
-            if isinstance(val, bytes):
-                locals()[var] = val.decode('utf-8','ignore')
+        anime     = fields.get("anime")
+        episode   = fields.get("episode")
+        quality   = fields.get("quality")
+        video     = fields.get("video")        # bytes
+        videoName = fields.get("videoName")
+        subs      = fields.get("subs")         # bytes (optional)
+        subsName  = fields.get("subsName")
 
-        if not (anime and episode and quality and video and videoName):
+        if isinstance(anime, bytes): anime = anime.decode('utf-8','ignore')
+        if isinstance(episode, bytes): episode = episode.decode('utf-8','ignore')
+        if isinstance(quality, bytes): quality = quality.decode('utf-8','ignore')
+        if isinstance(videoName, bytes): videoName = videoName.decode('utf-8','ignore')
+        if isinstance(subsName, bytes): subsName = subsName.decode('utf-8','ignore')
+
+        if not (anime and episode and quality and isinstance(video, (bytes, bytearray)) and videoName):
             self.send_error(400, "Missing required fields"); return
 
         videoName = safe_name(videoName)
@@ -228,11 +266,11 @@ class Handler(SimpleHTTPRequestHandler):
         if not all(k in body for k in required):
             return json_response(self, 400, {"ok": False, "error": "Missing required fields"})
 
-        slug = safe_name(str(body["slug"]).strip().lower())
+        slug  = safe_name(str(body["slug"]).strip().lower())
         title = str(body["title"]).strip()
         try:
             episodes = int(body["episodes"])
-            year = int(body["year"])
+            year     = int(body["year"])
         except Exception:
             return json_response(self, 400, {"ok": False, "error": "episodes/year must be numbers"})
 
@@ -241,11 +279,11 @@ class Handler(SimpleHTTPRequestHandler):
             return json_response(self, 400, {"ok": False, "error": "genres must be non-empty list of strings"})
 
         description = str(body["description"]).strip()
-        status = str(body["status"]).strip()
-        studio = str(body["studio"]).strip()
-        cover_in = body["cover"]
+        status      = str(body["status"]).strip()
+        studio      = str(body["studio"]).strip()
+        cover_in    = body["cover"]
 
-        # cover: data-url → soubor; jinak bereme jako cestu
+        # cover: data-url → lokální soubor; jinak bereme jako cestu/URL
         try:
             if isinstance(cover_in, str) and cover_in.startswith("data:"):
                 cover_path = save_cover_from_dataurl(cover_in, slug)
@@ -267,7 +305,6 @@ class Handler(SimpleHTTPRequestHandler):
         }
 
         items = load_json(ANIME_JSON, [])
-        # odeber starý se stejným slugem, pokud existuje
         items = [a for a in items if a.get("slug") != slug]
         items.append(item)
         save_json(ANIME_JSON, items)
@@ -276,22 +313,21 @@ class Handler(SimpleHTTPRequestHandler):
 
     # ---------- Admin: upload coveru (multipart) ----------
     def handle_upload_cover(self):
-        ctype, pdict = cgi.parse_header(self.headers.get("Content-Type", ""))
-        if ctype != "multipart/form-data":
+        if not (self.headers.get("Content-Type","").startswith("multipart/form-data")):
             return json_response(self, 400, {"ok": False, "error": "Content-Type must be multipart/form-data"})
-        pdict["boundary"] = bytes(pdict.get("boundary", ""), "utf-8")
-        pdict["CONTENT-LENGTH"] = int(self.headers.get("Content-Length", "0"))
-        fields = cgi.parse_multipart(self.rfile, pdict)
 
-        slug = (fields.get("slug") or [None])[0]
-        cover = (fields.get("cover") or [None])[0]
-        if isinstance(slug, bytes): slug = slug.decode("utf-8", "ignore")
-        if not slug or not cover:
+        fields = parse_multipart_request(self)
+
+        slug  = fields.get("slug")
+        cover = fields.get("cover")  # bytes
+        if isinstance(slug, bytes):
+            slug = slug.decode("utf-8", "ignore")
+        if not slug or not isinstance(cover, (bytes, bytearray)):
             return json_response(self, 400, {"ok": False, "error": "Missing slug or cover"})
 
-        # pokus odhadnout příponu z několika známých formátů
+        # pokus odhadnout příponu
         ext = "jpg"
-        sniff = bytes(cover[:10]) if isinstance(cover, (bytes, bytearray)) else b""
+        sniff = bytes(cover[:10])
         if sniff.startswith(b"\x89PNG"):
             ext = "png"
         elif sniff[:3] == b"\xff\xd8\xff":
@@ -307,13 +343,13 @@ class Handler(SimpleHTTPRequestHandler):
         rel = os.path.join("covers", fname).replace("\\", "/")
         return json_response(self, 200, {"ok": True, "path": rel})
 
-def run(port=None):
+def run():
     ensure_dirs()
-    port = int(port or os.getenv("PORT", 8000))   # 👈 vezme Render $PORT
-    httpd = HTTPServer(('', port), Handler)
+    port = int(os.getenv("PORT", "8000"))  # Render dodá PORT
+    httpd = HTTPServer(("0.0.0.0", port), Handler)
     print(f"✅ Server běží na http://0.0.0.0:{port}")
+    print(f"📂 Uploads: {UPLOAD_ROOT}")
     httpd.serve_forever()
 
 if __name__ == "__main__":
     run()
-
