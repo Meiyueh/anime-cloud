@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="cs">
+<head>
+  <meta charset="utf-8" />
+  <title>AnimeCloud — Upload</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="styles/main.css" />
+  <style>
+    .progress-wrap{width:100%;margin-top:8px}
+    .progress{width:100%;height:14px;background:#0f0f1d;border:1px solid var(--border);border-radius:999px;overflow:hidden;position:relative}
+    .progress .bar{height:100%;width:0%;background:linear-gradient(90deg,#7c5cff,#35c759,#7c5cff);background-size:200% 100%;animation:slide 2s linear infinite;transition:width .12s ease-out}
+    .progress-percent{margin-top:6px;font-size:.9rem;color:var(--muted);text-align:right}
+    @keyframes slide{0%{background-position:0% 0}100%{background-position:200% 0}}
+
+    .row-files { display:grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    @media (max-width: 700px) { .row-files { grid-template-columns: 1fr; } }
+    .field { display:flex; flex-direction:column; gap:6px; }
+    .file-info{font-size:.9rem;color:var(--muted)}
+    #rowAnime, #rowEp, #rowQ {
+      display: flex;                /* když je JS přepne, ať zůstanou flex */
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 6px;
+    }
+    #panel .row.compact.align-left{ gap: 6px; }                 /* jednotná mezera */
+    #panel .row.compact.align-left > div{ margin-top: 0 !important; }  /* zrušit extra odsazení */
+
+    /* Stejná šířka všech selectů */
+    #panel select { width: 320px !important; text-align-last: left; }
+
+    @media (max-width:560px){
+      #panel select{ width:100% !important; max-width:none; }
+    }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="brand"><img src="assets/logo.svg" alt="AnimeCloud" /></a>
+    <nav class="top-nav">
+      <a href="index.html">Info</a>
+      <a href="upload.html" id="nav-upload" aria-current="page">Upload</a>
+      <a href="feedback.html" id="nav-feedback" class="hidden">Feedback</a>
+      <a href="account.html" id="nav-account" class="hidden">Účet</a>
+      <a href="login.html" id="nav-login">Přihlášení</a>
+      <a href="admin.html" id="nav-admin" class="hidden">Admin</a>
+      <a href="#" id="nav-theme" title="Přepnout téma">🌓</a>
+    </nav>
+  </header>
+
+  <main class="container">
+    <h1>Nahrát video + titulky</h1>
+
+    <div class="card" id="uploadBox">
+      <div class="align-center">
+        <button id="btnOpen" class="w-compact" style="font-size:1.05rem;">Upload</button>
+      </div>
+
+      <div id="panel" class="card" style="margin-top:12px;display:none;">
+        <!-- Vyber anime -->
+        <div class="row compact align-left" id="rowAnime">
+          <label for="selAnime">Vyber anime</label>
+          <div>
+            <select id="selAnime" class="w-compact"></select>
+          </div>
+        </div>
+
+        <!-- Vyber díl -->
+        <div class="row compact align-left" id="rowEp" style="display:none">
+          <label for="selEp">Vyber díl</label>
+          <div>
+            <select id="selEp" class="w-compact"></select>
+          </div>
+        </div>
+
+        <!-- Vyber kvalitu -->
+        <div class="row compact align-left" id="rowQ" style="display:none">
+          <label for="selQ">Vyber kvalitu</label>
+          <div>
+            <select id="selQ" class="w-compact"></select>
+          </div>
+        </div>
+
+        <div class="row row-files" id="rowFiles" style="display:none">
+          <div class="field">
+            <label>Video soubor</label>
+            <div id="dropVideo" class="dropzone">Přetáhni sem video nebo klikni pro výběr</div>
+            <input id="fileVideo" type="file" accept="video/*" style="display:none"/>
+            <div class="file-info" id="videoInfo">—</div>
+            <div class="file-mini-progress"><div id="miniPV" style="width:0%"></div></div>
+          </div>
+          <div class="field">
+            <label>Titulky (.srt povinné pro běžné uživatele)</label>
+            <div id="dropSubs" class="dropzone">Přetáhni sem .srt nebo klikni pro výběr</div>
+            <input id="fileSubs" type="file" accept=".srt" style="display:none"/>
+            <div class="file-info" id="subsInfo">—</div>
+            <div class="file-mini-progress"><div id="miniPS" style="width:0%"></div></div>
+          </div>
+        </div>
+
+        <div class="row" id="rowSubmit" style="display:none">
+          <button id="btnUpload" type="button">Nahrát</button>
+          <p class="muted">Admin může nahrát i bez .srt. Limit je 3 nahrávky na každou kvalitu. Max video 3 GB, .srt 2 MB.</p>
+        </div>
+
+        <div id="successBox" class="alert hidden"></div>
+        <p id="msg" class="msg"></p>
+      </div>
+
+      <!-- Celkový progress -->
+      <div id="overallProgress" class="progress-wrap hidden">
+        <div class="progress"><div class="bar" id="barOverall"></div></div>
+        <div class="progress-percent" id="pctOverall">0%</div>
+      </div>
+    </div>
+  </main>
+
+  <footer class="site-footer"><small>Limit 3/kvalita • video povinné, .srt pro běžné uživatele</small></footer>
+
+  <script src="scripts/app.js"></script>
+  <script>
+    App.initNavbar(); App.guardAuthOnPage('login.html');
+
+    const btnOpen = document.getElementById('btnOpen');
+    const panel = document.getElementById('panel');
+    const selAnime = document.getElementById('selAnime');
+    const selEp = document.getElementById('selEp'); const rowEp = document.getElementById('rowEp');
+    const selQ = document.getElementById('selQ');  const rowQ  = document.getElementById('rowQ');
+    const rowFiles = document.getElementById('rowFiles'); const rowSubmit = document.getElementById('rowSubmit');
+    const dropVideo = document.getElementById('dropVideo'); const dropSubs = document.getElementById('dropSubs');
+    const fileVideo = document.getElementById('fileVideo'); const fileSubs = document.getElementById('fileSubs');
+    const miniPV = document.getElementById('miniPV'); const miniPS = document.getElementById('miniPS');
+    const videoInfo = document.getElementById('videoInfo'); const subsInfo = document.getElementById('subsInfo');
+    const btnUpload = document.getElementById('btnUpload'); const msg = document.getElementById('msg'); const successBox = document.getElementById('successBox');
+    const overall = document.getElementById('overallProgress'); const barOverall = document.getElementById('barOverall'); const pctOverall = document.getElementById('pctOverall');
+
+    let animeList = []; let chosenAnime = null;
+
+    function showSuccess(text){
+      successBox.textContent = text;
+      successBox.classList.remove('hidden');
+      App.toast(text,'ok');
+      setTimeout(()=>successBox.classList.add('hidden'), 4500);
+    }
+    function hideSuccess(){ successBox.classList.add('hidden'); successBox.textContent=''; }
+
+    btnOpen.addEventListener('click', async ()=> {
+      btnOpen.classList.add('hidden'); panel.style.display='block';
+      animeList = await App.fetchAnime('data/anime.json');
+      App.populateSelectWithPlaceholder(selAnime, '— vyber anime —');
+      animeList.forEach(a => { const opt=document.createElement('option'); opt.value=a.slug; opt.textContent=a.title; selAnime.appendChild(opt); });
+      rowEp.style.display='none'; rowQ.style.display='none'; rowFiles.style.display='none'; rowSubmit.style.display='none';
+      hideSuccess(); msg.textContent='';
+    });
+
+    selAnime.addEventListener('change', e => {
+      const slug = e.target.value;
+      chosenAnime = animeList.find(a => a.slug === slug) || null;
+      if (!chosenAnime){ rowEp.style.display='none'; return; }
+      App.populateEpisodesSelect(selEp, chosenAnime.episodes);
+      rowEp.style.display='flex'; rowQ.style.display='none'; rowFiles.style.display='none'; rowSubmit.style.display='none';
+      hideSuccess(); msg.textContent='';
+    });
+
+    selEp.addEventListener('change', () => {
+      App.populateSelectWithPlaceholder(selQ, '— vyber kvalitu —');
+      const ep = Number(selEp.value);
+      ['480p','720p','1080p','2160p'].forEach(q => {
+        const countQ = App.getUploadCountByQuality(chosenAnime.slug, ep, q);
+        const opt = document.createElement('option'); opt.value = q;
+        const label = (q==='2160p') ? '4K (2160p)' : q;
+        if (countQ >= 3) { opt.disabled = true; opt.textContent = `${label} (FULL)`; }
+        else { opt.textContent = `${label} (${countQ}/3)`; }
+        selQ.appendChild(opt);
+      });
+      rowQ.style.display='flex'; rowFiles.style.display='none'; rowSubmit.style.display='none';
+      hideSuccess(); msg.textContent='';
+    });
+
+    selQ.addEventListener('change', () => { rowFiles.style.display='grid'; maybeEnableSubmit(); hideSuccess(); msg.textContent=''; });
+
+    // Drag&Drop helpers
+    function wireDropzone(zone, input, info, mini) {
+      zone.addEventListener('click', ()=> input.click());
+      zone.addEventListener('dragover', e=>{ e.preventDefault(); zone.classList.add('dragover'); });
+      zone.addEventListener('dragleave', ()=> zone.classList.remove('dragover'));
+      zone.addEventListener('drop', e=>{
+        e.preventDefault(); zone.classList.remove('dragover');
+        if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+          input.files = e.dataTransfer.files;
+          input.dispatchEvent(new Event('change'));
+        }
+      });
+      input.addEventListener('change', ()=>{
+        const f = input.files[0];
+        if (!f){ info.textContent = '—'; mini.style.width='0%'; return; }
+        info.textContent = `${f.name} (${App.fmtBytes(f.size)})`;
+        mini.style.width='0%';
+        maybeEnableSubmit();
+      });
+    }
+    wireDropzone(dropVideo, fileVideo, videoInfo, miniPV);
+    wireDropzone(dropSubs, fileSubs, subsInfo, miniPS);
+
+    // Validace + zobrazit submit
+    function maybeEnableSubmit(){
+      const isAdmin = App.auth().role === 'admin';
+      const v = fileVideo.files[0]; const s = fileSubs.files[0];
+      const hasVideo = !!v, hasSubs = !!s;
+      // validace velikosti (3 GB video, 2 MB srt)
+      if (hasVideo && v.size > 3 * 1024 * 1024 * 1024) { App.showMsg(msg, 'Video je větší než 3 GB.', 'error'); rowSubmit.style.display='none'; return; }
+      if (!isAdmin && hasSubs && s.size > 2 * 1024 * 1024) { App.showMsg(msg, 'SRT je větší než 2 MB.', 'error'); rowSubmit.style.display='none'; return; }
+      rowSubmit.style.display = (hasVideo && (hasSubs || isAdmin)) ? 'block' : 'none';
+    }
+
+    // Upload + progress
+    btnUpload.addEventListener('click', async () => {
+      const a = App.auth(); if (!chosenAnime) return;
+      const ep = Number(selEp.value); const q = selQ.value;
+      const v = fileVideo.files[0]; const s = fileSubs.files[0]; const isAdmin = (a.role === 'admin');
+
+      if (!selAnime.value || !ep || !q || !v) return App.showMsg(msg, 'Vyber anime, díl, kvalitu a video.', 'error');
+      if (!isAdmin){
+        if (!s) return App.showMsg(msg, 'Titulky (.srt) jsou povinné.', 'error');
+        if (!s.name.toLowerCase().endsWith('.srt')) return App.showMsg(msg, 'Titulky musí být .srt.', 'error');
+      }
+
+      const currentQ = App.getUploadCountByQuality(chosenAnime.slug, ep, q);
+      if (currentQ >= 3) return App.showMsg(msg, `Limit pro ${q} je plný (3/3).`, 'error');
+      const nextIndex = currentQ + 1;
+      const vExt = App.extOrDefault(v.name, 'mp4');
+      const videoOut = `${q}_${nextIndex}.${vExt}`;
+      const subsOut  = `${q}_${nextIndex}.srt`;
+
+      const form = new FormData();
+      form.append('anime', chosenAnime.slug);
+      form.append('episode', ep);
+      form.append('quality', q);
+      form.append('video', v);
+      form.append('videoName', videoOut);
+      if (s){ form.append('subs', s); form.append('subsName', subsOut); }
+
+      // celkový progress
+      overall.classList.remove('hidden');
+      barOverall.style.width='0%'; pctOverall.textContent='0%';
+      miniPV.style.width='0%'; miniPS.style.width='0%';
+
+      try {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', '/upload');
+        xhr.upload.onprogress = (e)=>{ if (e.lengthComputable){ const p = Math.round(e.loaded/e.total*100); barOverall.style.width=p+'%'; pctOverall.textContent=p+'%'; miniPV.style.width=p+'%'; if (s) miniPS.style.width=p+'%'; } };
+        xhr.onload = ()=> {
+          if (xhr.status === 200){
+            App.addUploadRecord({ slug: chosenAnime.slug, episode: ep, quality: q, videoName: videoOut, subsName: s ? subsOut : null, user: a.email, ts: Date.now() });
+
+            // aktualizuj počty u kvality
+            for (const opt of selQ.options){
+              if (!opt.value) continue;
+              const c = App.getUploadCountByQuality(chosenAnime.slug, ep, opt.value);
+              const base = (opt.value==='2160p') ? '4K (2160p)' : opt.value;
+              if (c>=3){ opt.disabled=true; opt.textContent = `${base} (FULL)`; }
+              else { opt.textContent = `${base} (${c}/3)`; }
+            }
+
+            // vyprázdni pole
+            rowSubmit.style.display='none'; fileVideo.value=''; fileSubs.value='';
+            videoInfo.textContent='—'; subsInfo.textContent='—';
+            showSuccess(`✅ Nahráno: ${chosenAnime.title} · díl ${ep} · ${q} (${videoOut})`);
+            App.toast('Upload OK','ok');
+          } else {
+            App.showMsg(msg, '❌ Upload selhal.', 'error');
+          }
+          barOverall.style.width='100%'; pctOverall.textContent='100%';
+          setTimeout(()=>overall.classList.add('hidden'), 800);
+        };
+        xhr.onerror = ()=>{ App.showMsg(msg, '❌ Chyba připojení.', 'error'); overall.classList.add('hidden'); };
+        xhr.send(form);
+      } catch (err) {
+        App.showMsg(msg, '❌ Upload selhal: '+err.message, 'error');
+        overall.classList.add('hidden');
+      }
+    });
+
+    // AUTO-PŘEDVOLBA z indexu
+    (async function preselectFromIndex(){
+      const slug = localStorage.getItem('preselect_anime');
+      if (!slug) return;
+      localStorage.removeItem('preselect_anime');
+      const a = App.auth(); if (!a.email) return;
+      btnOpen.click();
+      const wait = (ms)=>new Promise(r=>setTimeout(r,ms));
+      for (let i=0;i<20;i++){ if (animeList && animeList.length) break; await wait(100); }
+      const found = animeList.find(x => x.slug === slug);
+      if (!found) return;
+      selAnime.value = slug; selAnime.dispatchEvent(new Event('change', {bubbles:true}));
+    })();
+  </script>
+</body>
+</html>

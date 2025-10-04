@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="cs">
+<head>
+  <meta charset="utf-8" />
+  <title>AnimeCloud — Můj účet</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="styles/main.css" />
+  <style>
+    /* --- layout & tlačítka --- */
+    .toolbar{
+      display:flex;
+      gap:.6rem;
+      justify-content:flex-end;
+      align-items:center;
+      flex-wrap:wrap;
+      margin-top:.6rem;
+    }
+    @media (max-width:640px){
+      .toolbar{ justify-content:flex-start; }
+    }
+    .btn{ padding:.48rem .8rem; border-radius:8px; width:auto !important; }
+    .btn-outline{ background:transparent; border:1px solid var(--border); }
+    .btn-danger{ background:var(--err); border:1px solid #a3211a; }
+    .row .btn, .row button{ width:auto !important; }
+
+    .profile-box{display:flex;align-items:center;gap:1rem;margin-bottom:1rem}
+    .profile-avatar{background:var(--border);width:96px;height:96px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:2rem;color:var(--brand);flex-shrink:0;overflow:hidden;cursor:pointer}
+    .profile-avatar img{width:100%;height:100%;object-fit:cover}
+    .badges{display:flex;gap:8px;flex-wrap:wrap}
+    .section-title{margin-top:.25rem;font-size:1.1rem;font-weight:600;border-bottom:1px solid var(--border);padding-bottom:.3rem;margin-bottom:.8rem}
+    .info-grid{display:grid;grid-template-columns:1fr 2fr;gap:.75rem 1rem}
+    .info-grid label{align-self:center;color:var(--muted)}
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="brand"><img src="assets/logo.svg" alt="AnimeCloud" /></a>
+    <nav class="top-nav">
+      <a href="index.html">Info</a>
+      <a href="upload.html" id="nav-upload" class="hidden">Upload</a>
+      <a href="feedback.html" id="nav-feedback" class="hidden">Feedback</a>
+      <a href="account.html" id="nav-account" aria-current="page" class="hidden">Účet</a>
+      <a href="login.html" id="nav-login">Přihlášení</a>
+      <a href="admin.html" id="nav-admin" class="hidden">Admin</a>
+      <a href="#" id="nav-theme" title="Přepnout téma">🌓</a>
+    </nav>
+  </header>
+
+  <main class="container">
+    <h1>Můj účet</h1>
+
+    <div class="card">
+      <div class="profile-box">
+        <div id="avatarFrame" class="frame">
+          <div class="profile-avatar" id="acc-avatar" title="Klikni pro změnu avataru"><span id="acc-avatar-letter">👤</span></div>
+        </div>
+        <div>
+          <h2 id="acc-nickname">Uživatel</h2>
+          <div class="badges">
+            <span id="badge-primary" class="badge primary">USER</span>
+            <span id="badge-secondary" class="badge">Žádný titul</span>
+            <!-- POZOR: samotný <select id="selSecondary"> generuje skript;
+                níže přidáváme pouze MOUNT, kam ten select přesuneme, aby byl krásně vidět -->
+          </div>
+        </div>
+      </div>
+
+      <input type="file" id="inpAvatar" accept="image/*" style="display:none"/>
+
+      <div class="row align-right compact">
+        <label for="inpNickname" style="align-self:flex-start;">Změnit přezdívku</label>
+        <input type="text" id="inpNickname" class="w-compact" placeholder="Tvá přezdívka"/>
+      </div>
+
+      <!-- NOVÉ: viditelný řádek pro výběr druhého titulu -->
+      <div class="row align-right compact">
+        <label for="selSecondary" style="align-self:flex-start;">Druhý titul</label>
+        <!-- mount pro select; skutečný <select id="selSecondary"> vytváří JS, my ho sem jen přesuneme -->
+        <div id="selSecondaryMount" class="w-compact"></div>
+      </div>
+
+      <div class="toolbar">
+        <button id="btnSaveProfile" class="btn">Uložit profil</button>
+        <button id="btnShowPass" class="btn btn-outline">Změnit heslo</button>
+        <button id="btnLogout" class="btn btn-danger">Odhlásit se</button>
+      </div>
+      <p id="profMsg" class="msg"></p>
+
+      <div id="passPanel" class="card" style="margin-top:12px; display:none;">
+        <div class="section-title">Změna hesla</div>
+        <div class="row"><label for="acc-pass0">Aktuální heslo</label><input type="password" id="acc-pass0" placeholder="Zadej aktuální heslo"/></div>
+        <div class="row"><label for="acc-pass1">Nové heslo</label><input type="password" id="acc-pass1" placeholder="Min. 8 znaků"/></div>
+        <div class="row"><label for="acc-pass2">Potvrzení nového hesla</label><input type="password" id="acc-pass2" /></div>
+        <div class="toolbar">
+          <button id="btn-change-pass" class="btn">Změnit heslo</button>
+        </div>
+        <p id="pass-msg" class="msg"></p>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="section-title">Informace o účtu</div>
+      <div class="info-grid">
+        <label>E-mail</label><input id="acc-email" class="w-compact" type="text" disabled/>
+        <label>Datum registrace</label><input id="acc-created" class="w-compact" type="text" disabled/>
+        <label>Nahrané soubory (celkem)</label><input id="acc-uploads" class="w-compact" type="text" disabled/>
+      </div>
+    </div>
+  </main>
+
+
+  <footer class="site-footer"><small>Správa účtu • AnimeCloud</small></footer>
+
+  <script src="scripts/app.js"></script>
+  <script>
+    App.initNavbar(); App.guardAuthOnPage('login.html');
+
+    const a = App.auth(); const u = App.getUser(a.email) || {};
+    const p = App.getProfile(a.email);
+
+    // Info
+    document.getElementById('acc-email').value = a.email || '';
+    document.getElementById('acc-created').value = u?.createdAt ? new Date(u.createdAt).toLocaleString() : '—';
+    document.getElementById('acc-uploads').value = String(App.userUploadCount(a.email));
+
+    // Frame
+    const frameCls = App.computeMilestoneFrame(App.userUploadCount(a.email));
+    const frameEl = document.getElementById('avatarFrame'); if (frameCls) frameEl.classList.add('frame', frameCls);
+
+    // Avatar
+    const avatarEl = document.getElementById('acc-avatar');
+    const avatarLetter = document.getElementById('acc-avatar-letter');
+    if (p.avatar){ avatarEl.innerHTML = `<img src="${p.avatar}" alt="avatar">`; }
+    else { avatarLetter.textContent = (a.email||'?')[0].toUpperCase(); }
+    avatarEl.addEventListener('click', ()=> document.getElementById('inpAvatar').click());
+    document.getElementById('inpAvatar').addEventListener('change', ()=>{
+      const f = document.getElementById('inpAvatar').files[0]; if (!f) return;
+      if (f.size > 1024*1024*2) { App.toast('Obrázek je větší než 2 MB','error'); return; }
+      const r = new FileReader();
+      r.onload = ()=>{ App.setAvatar(a.email, r.result); avatarEl.innerHTML = `<img src="${r.result}" alt="avatar">`; App.toast('Avatar uložen','ok'); };
+      r.readAsDataURL(f);
+    });
+
+    // Nick + tituly
+    document.getElementById('acc-nickname').textContent = p.nickname || a.email;
+    document.getElementById('inpNickname').value = p.nickname || '';
+    const primary = (a.role === 'admin') ? 'ADMIN' : (a.role === 'uploader' ? 'UPLOADER' : 'USER');
+    document.getElementById('badge-primary').textContent = primary;
+    const unlocked = App.unlockedTitles(a.email);
+    const allTitles = ['Veterán (10+)', 'Mistr Uploader (50+)', 'Legenda (100+)'];
+    const selSecHTML = `
+      <select id="selSecondary" class="w-compact">
+        <option value="">— žádný —</option>
+        ${allTitles.map(t=>{
+          const isUnlocked = unlocked.includes(t);
+          const selected = (p.secondaryTitle===t) ? 'selected' : '';
+          const disabled = isUnlocked ? '' : 'disabled';
+          return `<option ${selected} ${disabled} value="${t}">${t}${isUnlocked?'':' (zamčeno)'}</option>`;
+        }).join('')}
+      </select>`;
+    const temp = document.createElement('div');
+    temp.innerHTML = selSecHTML;
+    const selSecondary = temp.firstElementChild; // ✅ správně
+    document.querySelector('.badges').appendChild(selSecondary);
+    document.getElementById('badge-secondary').textContent = p.secondaryTitle || 'Žádný titul';
+
+    document.getElementById('btnSaveProfile').addEventListener('click', ()=>{
+      const nick = document.getElementById('inpNickname').value.trim();
+      const sec  = selSecondary.value || null;
+      if (nick) App.setNickname(a.email, nick);
+      App.setSecondaryTitle(a.email, sec);
+      document.getElementById('acc-nickname').textContent = nick || p.nickname || a.email;
+      document.getElementById('badge-secondary').textContent = sec || 'Žádný titul';
+      App.showMsg(document.getElementById('profMsg'), '✅ Profil uložen.', 'ok');
+    });
+
+    // Toggle panel hesla
+    document.getElementById('btnShowPass').addEventListener('click', ()=>{
+      const pnl = document.getElementById('passPanel');
+      pnl.style.display = (pnl.style.display==='none' || !pnl.style.display) ? 'block' : 'none';
+    });
+
+    // Změna hesla
+    document.getElementById('btn-change-pass').addEventListener('click', ()=>{
+      const p0 = document.getElementById('acc-pass0').value.trim();
+      const p1 = document.getElementById('acc-pass1').value.trim();
+      const p2 = document.getElementById('acc-pass2').value.trim();
+      const msg = document.getElementById('pass-msg');
+
+      const users = JSON.parse(localStorage.getItem('animecloud_users')||'{}');
+      if (!users[a.email]) return App.showMsg(msg,'⚠️ Uživatel nenalezen.','error');
+      if (users[a.email].password !== p0) return App.showMsg(msg,'Aktuální heslo nesouhlasí.','error');
+      if (!p1 || !p2) return App.showMsg(msg,'Vyplňte nové heslo a potvrzení.','error');
+      if (p1 !== p2)  return App.showMsg(msg,'Hesla se neshodují.','error');
+      if (p1.length < 8) return App.showMsg(msg,'Min. délka nového hesla je 8 znaků.','error');
+
+      users[a.email].password = p1; localStorage.setItem('animecloud_users', JSON.stringify(users));
+      App.showMsg(msg,'✅ Heslo změněno.','ok');
+      document.getElementById('acc-pass0').value = '';
+      document.getElementById('acc-pass1').value = '';
+      document.getElementById('acc-pass2').value = '';
+    });
+
+    (function moveSecondarySelectIntoMount(){
+        const mount = document.getElementById('selSecondaryMount');
+        if (!mount) return;
+        const tryMove = () => {
+          const sel = document.getElementById('selSecondary');
+          if (sel && !mount.contains(sel)) { mount.appendChild(sel); return true; }
+          return false;
+        };
+        if (!tryMove()){
+          let tries = 0;
+          const t = setInterval(()=>{ if (tryMove() || ++tries>50) clearInterval(t); }, 100);
+        }
+    })();
+
+    // Odhlásit
+    document.getElementById('btnLogout').addEventListener('click', ()=> App.logout());
+  </script>
+</body>
+</html>

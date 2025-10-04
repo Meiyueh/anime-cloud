@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="cs">
+<head>
+  <meta charset="utf-8" />
+  <title>AnimeCloud — Feedback</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="styles/main.css" />
+  <style>
+    details>summary{list-style:none;cursor:pointer}
+    details>summary::marker{content:''}
+    details>summary .summary-line{display:flex;align-items:center;gap:8px}
+    details>summary .marker{width:8px;height:8px;border-radius:50%;background:var(--brand)}
+    .thread{margin-top:.6rem}
+    .msgRow{display:flex;gap:8px;margin:.35rem 0}
+    .msgRow.admin{justify-content:flex-end}
+    .bubble{max-width:80%;padding:.45rem .6rem;border-radius:10px;border:1px solid var(--border);background:#14142a}
+    .msgRow.admin .bubble{background:#1f233d}
+    .meta{font-size:.8rem;color:var(--muted);margin-top:.2rem}
+    .centered{max-width:640px;margin:0 auto; text-align:left;}
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="brand"><img src="assets/logo.svg" alt="AnimeCloud" /></a>
+    <nav class="top-nav">
+      <a href="index.html">Info</a>
+      <a href="upload.html" id="nav-upload" class="hidden">Upload</a>
+      <a href="feedback.html" id="nav-feedback" aria-current="page" class="hidden">Feedback</a>
+      <a href="account.html" id="nav-account" class="hidden">Účet</a>
+      <a href="login.html" id="nav-login">Přihlášení</a>
+      <a href="admin.html" id="nav-admin" class="hidden">Admin</a>
+      <a href="#" id="nav-theme" title="Přepnout téma">🌓</a>
+    </nav>
+  </header>
+
+  <main class="container">
+    <h1 class="centered">Zpětná vazba &amp; Tikety</h1>
+    <p class="muted centered">Napiš chybu, návrh nebo žádost. Offline se uloží lokálně; admini uvidí a mohou odpovídat – vznikne konverzace.</p>
+
+    <form id="feedbackForm" class="card centered">
+      <div class="row"><label for="fbName">Jméno / e-mail (volitelné)</label><input type="text" id="fbName" placeholder="např. animefan123"/></div>
+      <div class="row">
+        <label for="fbCategory">Kategorie</label>
+        <select id="fbCategory" required>
+          <option value="">— Vyber kategorii —</option>
+          <option value="bug">🐞 Chyba</option>
+          <option value="suggestion">💡 Návrh</option>
+          <option value="request">📌 Žádost</option>
+          <option value="other">✉️ Ostatní</option>
+        </select>
+      </div>
+      <div class="row">
+        <label for="fbPriority">Priorita</label>
+        <select id="fbPriority">
+          <option value="normal">Normální</option>
+          <option value="high">Vysoká</option>
+        </select>
+      </div>
+      <div class="row"><label for="fbMessage">Zpráva</label><textarea id="fbMessage" rows="5" required placeholder="Popiš svůj návrh nebo problém..."></textarea></div>
+      <div class="row align-right"><button type="submit" class="w-compact-sm">Odeslat</button></div>
+      <p id="fbMsg" class="msg"></p>
+    </form>
+
+    <div class="card centered">
+      <h2>Moje tikety</h2>
+      <div id="myTickets">—</div>
+    </div>
+  </main>
+
+  <footer class="site-footer"><small>Díky za zpětnou vazbu ❤️</small></footer>
+
+  <script src="scripts/app.js"></script>
+  <script>
+    App.initNavbar(); App.guardAuthOnPage('login.html');
+    const a = App.auth();
+
+    // odeslání nového
+    document.getElementById('feedbackForm').addEventListener('submit', async e=>{
+      e.preventDefault();
+      const ts = Date.now();
+      const payload = {
+        id: 'tkt_'+ts,
+        user: a.email || null,
+        name: document.getElementById('fbName').value.trim(),
+        category: document.getElementById('fbCategory').value,
+        priority: document.getElementById('fbPriority').value,
+        message: document.getElementById('fbMessage').value.trim(),
+        status: 'open',
+        ts
+      };
+      if (!payload.category || !payload.message) return App.showMsg(document.getElementById('fbMsg'),'Vyplň kategorii a zprávu.','error');
+      const id = App.saveFeedback(payload);
+      try{ await fetch('/feedback',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});}catch{}
+      e.target.reset(); App.showMsg(document.getElementById('fbMsg'),'✅ Odesláno. Děkujeme!','ok');
+      renderMyTickets();
+    });
+
+    function renderMyTickets(){
+      const list = App.getFeedback().filter(x=>x.user===a.email).sort((x,y)=>y.ts-x.ts);
+      const box = document.getElementById('myTickets');
+      if (!list.length){ box.innerHTML = '<p class="muted">Zatím žádné.</p>'; return; }
+
+      box.innerHTML = list.map(t=>`
+        <details>
+          <summary>
+            <span class="summary-line">
+              <span class="marker"></span>
+              <strong>[${t.category}]</strong>
+              <span class="muted">${new Date(t.ts).toLocaleString()} • ${t.priority}</span>
+              <span class="muted">• stav: ${t.status}</span>
+            </span>
+          </summary>
+
+          <div class="thread">
+            ${ (t.messages||[]).map(m => `
+              <div class="msgRow ${m.role==='admin'?'admin':''}">
+                <div>
+                  <div class="bubble">${(m.text||'').replace(/</g,'&lt;')}</div>
+                  <div class="meta">${m.author||m.role} • ${new Date(m.ts).toLocaleString()}</div>
+                </div>
+              </div>`).join('') }
+          </div>
+
+          ${ ['resolved','approved','rejected'].includes(t.status) ? `
+            <p class="muted" style="margin-top:.5rem">Tiket je uzavřen administrátorem.</p>
+          ` : `
+            <div class="row" style="margin-top:.6rem;">
+              <label>Moje odpověď</label>
+              <textarea id="reply_${t.id}" rows="3" placeholder="Napiš zprávu..."></textarea>
+            </div>
+            <div class="row align-right"><button class="btn w-compact-sm" data-reply="${t.id}">Odeslat odpověď</button></div>
+          `}
+        </details>
+      `).join('');
+
+      box.querySelectorAll('[data-reply]').forEach(b=>{
+        b.addEventListener('click', ()=>{
+          const id = b.getAttribute('data-reply');
+          const ta = document.getElementById('reply_'+id);
+          const txt = (ta.value||'').trim(); if(!txt) return;
+          const ok = App.addTicketMessage(id, {role:'user', author: a.email, text: txt});
+          if (ok) { App.toast('Odesláno','ok'); ta.value=''; renderMyTickets(); } else { App.toast('Tiket je uzavřen','error'); }
+        });
+      });
+    }
+
+    renderMyTickets();
+  </script>
+</body>
+</html>

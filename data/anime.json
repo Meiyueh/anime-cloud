@@ -1,0 +1,392 @@
+[
+  {
+    "slug": "bleach",
+    "title": "Bleach",
+    "episodes": 366,
+    "genres": [
+      "Shounen",
+      "Action",
+      "Supernatural"
+    ],
+    "description": "Ichigo Kurosaki získává moc Shinigami a chrání svět před Hollow.",
+    "cover": "covers/bleach.jpg",
+    "status": "finished",
+    "year": 2004,
+    "studio": "Studio Pierrot"
+  },
+  {
+    "slug": "naruto",
+    "title": "Naruto",
+    "episodes": 220,
+    "genres": [
+      "Shounen",
+      "Ninja",
+      "Adventure"
+    ],
+    "description": "Mladý ninja Naruto Uzumaki sní o titulu Hokage.",
+    "cover": "covers/naruto.jpg",
+    "status": "finished",
+    "year": 2002,
+    "studio": "Pierrot"
+  },
+  {
+    "slug": "one-piece",
+    "title": "One Piece",
+    "episodes": 1100,
+    "genres": [
+      "Adventure",
+      "Fantasy",
+      "Comedy"
+    ],
+    "description": "Luffy a Straw Hat Pirates hledají legendární One Piece.",
+    "cover": "covers/onepiece.jpg",
+    "status": "airing",
+    "year": 1999,
+    "studio": "Toei Animation"
+  },
+  {
+    "slug": "aot",
+    "title": "Attack on Titan",
+    "episodes": 87,
+    "genres": [
+      "Action",
+      "Drama",
+      "Fantasy"
+    ],
+    "description": "Lidstvo bojuje o přežití proti titánům za obřími hradbami.",
+    "cover": "covers/aot.webp",
+    "status": "finished",
+    "year": 2013,
+    "studio": "Wit Studio / MAPPA"
+  },
+  {
+    "slug": "demon-slayer",
+    "title": "Demon Slayer: Kimetsu no Yaiba",
+    "episodes": 55,
+    "genres": [
+      "Action",
+      "Supernatural",
+      "Drama"
+    ],
+    "description": "Tanjiro se přidává k organizaci zabijáků démonů, aby zachránil svou sestru.",
+    "cover": "covers/demon-slayer.jpg",
+    "status": "airing",
+    "year": 2019,
+    "studio": "ufotable"
+  },
+  {
+    "slug": "jujutsu-kaisen",
+    "title": "Jujutsu Kaisen",
+    "episodes": 47,
+    "genres": [
+      "Action",
+      "Supernatural",
+      "Dark Fantasy"
+    ],
+    "description": "Student Itadori Yuji bojuje proti prokletím po spolknutí prstu Sukuny.",
+    "cover": "covers/jujutsu-kaisen.jpg",
+    "status": "airing",
+    "year": 2020,
+    "studio": "MAPPA"
+  },
+  {
+    "slug": "mha",
+    "title": "My Hero Academia",
+    "episodes": 138,
+    "genres": [
+      "Shounen",
+      "Superhero",
+      "Action"
+    ],
+    "description": "Většina lidí má superschopnosti. Midoriya se chce stát hrdinou.",
+    "cover": "covers/mha.jpg",
+    "status": "airing",
+    "year": 2016,
+    "studio": "Bones"
+  },
+  {
+    "slug": "fma-brotherhood",
+    "title": "Fullmetal Alchemist: Brotherhood",
+    "episodes": 64,
+    "genres": [
+      "Adventure",
+      "Fantasy",
+      "Drama"
+    ],
+    "description": "Bratři Elricové hledají Kámen mudrců, aby napravili tragický pokus.",
+    "cover": "covers/fma-brotherhood.png",
+    "status": "finished",
+    "year": 2009,
+    "studio": "Bones"
+  },
+  {
+    "slug": "death-note",
+    "title": "Death Note",
+    "episodes": 37,
+    "genres": [
+      "Thriller",
+      "Supernatural",
+      "Psychological"
+    ],
+    "description": "Student Light najde zápisník, kterým může zabíjet – začíná hra kočky a myši.",
+    "cover": "covers/death-note.webp",
+    "status": "finished",
+    "year": 2006,
+    "studio": "Madhouse"
+  },
+  {
+    "slug": "hxh-2011",
+    "title": "Hunter x Hunter (2011)",
+    "episodes": 148,
+    "genres": [
+      "Adventure",
+      "Shounen",
+      "Fantasy"
+    ],
+    "description": "Gon se vydává na cestu stát se Hunterem a najít svého otce.",
+    "cover": "covers/hxh-2011.png",
+    "status": "hiatus",
+    "year": 2011,
+    "studio": "Madhouse"
+  },
+  {
+    "slug": "dragon-ball-z",
+    "title": "Dragon Ball Z",
+    "episodes": 291,
+    "genres": [
+      "Action",
+      "Martial Arts",
+      "Shounen"
+    ],
+    "description": "Goku a přátelé brání Zemi proti stále silnějším nepřátelům.",
+    "cover": "covers/dragon-ball-z.jpg",
+    "status": "finished",
+    "year": 1989,
+    "studio": "Toei Animation"
+  },
+  {
+    "slug": "dragon-ball-super",
+    "title": "Dragon Ball Super",
+    "episodes": 131,
+    "genres": [
+      "Action",
+      "Martial Arts",
+      "Shounen"
+    ],
+    "description": "Nová dobrodružství Goku a spol. napříč multivesmírem.",
+    "cover": "covers/dragon-ball-super.webp",
+    "status": "finished",
+    "year": 2015,
+    "studio": "Toei Animation"
+  },
+  {
+    "slug": "chainsaw-man",
+    "title": "Chainsaw Man",
+    "episodes": 12,
+    "genres": [
+      "Action",
+      "Dark Fantasy",
+      "Horror"
+    ],
+    "description": "Denji uzavře smlouvu s ďáblem Pochitou a bojuje jako Chainsaw Man.",
+    "cover": "covers/chainsaw-man.jpg",
+    "status": "airing",
+    "year": 2022,
+    "studio": "MAPPA"
+  },
+  {
+    "slug": "spy-x-family",
+    "title": "SPY×FAMILY",
+    "episodes": 37,
+    "genres": [
+      "Comedy",
+      "Slice of Life",
+      "Action"
+    ],
+    "description": "Špión, telepatka a nájemná vražedkyně tvoří rodinu kvůli misi.",
+    "cover": "covers/spy-x-family.jpeg",
+    "status": "airing",
+    "year": 2022,
+    "studio": "WIT Studio / CloverWorks"
+  },
+  {
+    "slug": "tokyo-ghoul",
+    "title": "Tokyo Ghoul",
+    "episodes": 12,
+    "genres": [
+      "Horror",
+      "Supernatural",
+      "Drama"
+    ],
+    "description": "Kaneki přežije útok ghúla a stává se napůl člověkem, napůl ghúlem.",
+    "cover": "covers/tokyo-ghoul.jpg",
+    "status": "finished",
+    "year": 2014,
+    "studio": "Pierrot"
+  },
+  {
+    "slug": "fairy-tail",
+    "title": "Fairy Tail",
+    "episodes": 328,
+    "genres": [
+      "Adventure",
+      "Fantasy",
+      "Comedy"
+    ],
+    "description": "Cechem Fairy Tail putují mágové na výpravách plných přátelství a soubojů.",
+    "cover": "covers/fairy-tail.jpg",
+    "status": "finished",
+    "year": 2009,
+    "studio": "A-1 Pictures / Satelight / Bridge"
+  },
+  {
+    "slug": "sword-art-online",
+    "title": "Sword Art Online",
+    "episodes": 96,
+    "genres": [
+      "Sci-Fi",
+      "Adventure",
+      "Romance"
+    ],
+    "description": "Hráči uvěznění v MMORPG bojují o přežití – smrt ve hře znamená smrt i v reálu.",
+    "cover": "covers/sao.jpg",
+    "status": "finished",
+    "year": 2012,
+    "studio": "A-1 Pictures"
+  },
+  {
+    "slug": "haikyuu",
+    "title": "Haikyuu!!",
+    "episodes": 85,
+    "genres": [
+      "Sports",
+      "Comedy",
+      "Drama"
+    ],
+    "description": "Hinata a Kageyama táhnou volejbalový tým Karasuno zpět na výsluní.",
+    "cover": "covers/haikyuu.jpg",
+    "status": "finished",
+    "year": 2014,
+    "studio": "Production I.G"
+  },
+  {
+    "slug": "steins-gate",
+    "title": "Steins;Gate",
+    "episodes": 24,
+    "genres": [
+      "Sci-Fi",
+      "Thriller",
+      "Drama"
+    ],
+    "description": "Náhodný experiment s mikrovlnkou umožní posílat zprávy do minulosti.",
+    "cover": "covers/steins-gate.jpg",
+    "status": "finished",
+    "year": 2011,
+    "studio": "White Fox"
+  },
+  {
+    "slug": "rezero",
+    "title": "Re:Zero − Starting Life in Another World",
+    "episodes": 50,
+    "genres": [
+      "Fantasy",
+      "Drama",
+      "Psychological"
+    ],
+    "description": "Subaru se ocitá v jiném světě a po smrti se vrací v čase.",
+    "cover": "covers/rezero.jpg",
+    "status": "airing",
+    "year": 2016,
+    "studio": "White Fox"
+  },
+  {
+    "slug": "code-geass",
+    "title": "Code Geass: Lelouch of the Rebellion",
+    "episodes": 50,
+    "genres": [
+      "Mecha",
+      "Thriller",
+      "Drama"
+    ],
+    "description": "Lelouch získá sílu Geass a vede povstání proti Británii.",
+    "cover": "covers/code-geass.jpg",
+    "status": "finished",
+    "year": 2006,
+    "studio": "Sunrise"
+  },
+  {
+    "slug": "gintama",
+    "title": "Gintama",
+    "episodes": 367,
+    "genres": [
+      "Comedy",
+      "Action",
+      "Sci-Fi"
+    ],
+    "description": "Gintoki a jeho přátelé řeší zakázky v Edo obsazeném mimozemšťany.",
+    "cover": "covers/gintama.jpg",
+    "status": "finished",
+    "year": 2006,
+    "studio": "Sunrise / BN Pictures"
+  },
+  {
+    "slug": "vinland-saga",
+    "title": "Vinland Saga",
+    "episodes": 49,
+    "genres": [
+      "Historical",
+      "Action",
+      "Drama"
+    ],
+    "description": "Thorfinn putuje mezi válkou a mírem na pozadí vikingské éry.",
+    "cover": "covers/vinland-saga.jpg",
+    "status": "airing",
+    "year": 2019,
+    "studio": "Wit Studio / MAPPA"
+  },
+  {
+    "slug": "jojo",
+    "title": "JoJo's Bizarre Adventure",
+    "episodes": 190,
+    "genres": [
+      "Action",
+      "Supernatural",
+      "Adventure"
+    ],
+    "description": "Rodina Joestarů napříč generacemi bojuje s bizarními nepřáteli.",
+    "cover": "covers/jojo.jpg",
+    "status": "finished",
+    "year": 2012,
+    "studio": "David Production"
+  },
+  {
+    "slug": "solo-leveling",
+    "title": "Solo Leveling",
+    "episodes": 25,
+    "genres": [
+      "Action",
+      "Adventure",
+      "Fantasy"
+    ],
+    "description": "Ve světě lovců s nadlidskými schopnostmi a nestvůr získá nevýrazný lovec Jinwoo Sung díky záhadnému programu neobyčejné schopnosti, které z něj udělají jednoho z nejsilnějších lovců a umožní mu dobýt i ty nejstrašnější žaláře.",
+    "cover": "covers/solo-leveling.jpg",
+    "status": "ongoing",
+    "year": 2024,
+    "studio": "A-1 Pictures"
+  },
+  {
+    "slug": "mashle",
+    "title": "Mashle",
+    "episodes": 36,
+    "genres": [
+      "Action",
+      "Adventure",
+      "Fantasy"
+    ],
+    "description": "Mash Burnedead je velmi upřímný, leč trochu jednoduchý hoch. Se svým otcem žije v domku v lese nedaleko města, do kterého se ještě nikdy nepodíval, protože mu to otec zakázal. Mash totiž nemá žádné magické schopnosti, což je ve zdejším světě magie, kde se hodnota člověka určuje podle jeho magických schopností, zcela nepřípustné.",
+    "cover": "covers/mashle.webp",
+    "status": "ongoing",
+    "year": 2023,
+    "studio": "A-1 Pictures"
+  }
+]

@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="cs">
+<head>
+  <meta charset="utf-8" />
+  <title>AnimeCloud — Přihlášení</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="styles/main.css" />
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="brand">
+      <img src="assets/logo.svg" alt="AnimeCloud" />
+    </a>
+    <nav class="top-nav">
+      <a href="index.html">Info</a>
+      <a href="upload.html" id="nav-upload" class="hidden">Upload</a>
+      <a href="feedback.html" id="nav-feedback" class="hidden">Feedback</a>
+      <a href="account.html" id="nav-account" class="hidden">Účet</a>
+      <a href="login.html" id="nav-login" aria-current="page">Přihlášení</a>
+      <a href="admin.html" id="nav-admin" class="hidden">Admin</a>
+      <a href="#" id="nav-theme" title="Přepnout téma">🌓</a>
+    </nav>
+  </header>
+
+  <main class="container">
+    <h1 style="text-align:center;">Přihlášení / Registrace</h1>
+
+    <!-- vycentrovaný login panel -->
+    <div class="card" id="panel-login" style="max-width:460px;margin:0 auto;">
+      <form id="loginForm" class="compact">
+        <div class="row compact"><label for="loginEmail">E-mail</label><input type="email" id="loginEmail" class="w-compact" required /></div>
+        <div class="row compact"><label for="loginPass">Heslo</label><input type="password" id="loginPass" class="w-compact" required /></div>
+        <div class="row align-right"><button type="submit" class="w-compact-sm">Přihlásit</button></div>
+      </form>
+      <p class="muted" style="text-align:center;margin-top:.5rem;">Nemáte účet? <a href="#" id="link-show-register">Zaregistrujte se</a></p>
+    </div>
+
+    <!-- vycentrovaný registrační panel -->
+    <div class="card hidden" id="panel-register" style="max-width:460px;margin:12px auto 0;">
+      <form id="registerForm" class="compact hidden">
+        <div class="row compact"><label for="regEmail">E-mail</label><input type="email" id="regEmail" class="w-compact" required /></div>
+        <div class="row compact"><label for="regPass">Heslo</label><input type="password" id="regPass" class="w-compact" required /></div>
+        <div class="row align-right"><button type="submit" class="w-compact-sm">Registrovat</button></div>
+      </form>
+      <p class="muted" style="text-align:center;margin-top:.5rem;">Máte účet? <a href="#" id="link-show-login">Přihlaste se</a></p>
+    </div>
+
+    <p id="loginMsg" class="msg" style="text-align:center;"></p>
+  </main>
+
+  <footer class="site-footer"><small>AnimeCloud • Přihlášení</small></footer>
+
+  <script src="scripts/app.js"></script>
+  <script>
+    App.initNavbar();
+
+    const panelLogin = document.getElementById('panel-login');
+    const panelRegister = document.getElementById('panel-register');
+    const msg = document.getElementById('loginMsg');
+
+    document.getElementById('link-show-register').addEventListener('click', e => {
+      e.preventDefault();
+      panelLogin.classList.add('hidden');
+      panelRegister.classList.remove('hidden');
+      // zobraz i samotný formulář uvnitř panelu
+      document.getElementById('registerForm').classList.remove('hidden');
+      msg.textContent='';
+    });
+    document.getElementById('link-show-login').addEventListener('click', e => {
+      e.preventDefault();
+      panelRegister.classList.add('hidden');
+      panelLogin.classList.remove('hidden');
+      // registrace form zase skryj (ať je stav konzistentní)
+      document.getElementById('registerForm').classList.add('hidden');
+      msg.textContent='';
+    });
+
+    document.getElementById('loginForm').addEventListener('submit', e => {
+      e.preventDefault();
+      const email = document.getElementById('loginEmail').value.trim();
+      const pass = document.getElementById('loginPass').value.trim();
+      if (App.login(email, pass)) { App.toast('Přihlášeno', 'ok'); location.href='index.html'; }
+      else App.showMsg(msg, '⚠️ Špatný e-mail nebo heslo.', 'error');
+    });
+
+    document.getElementById('registerForm').addEventListener('submit', e => {
+      e.preventDefault();
+      const email = document.getElementById('regEmail').value.trim();
+      const pass = document.getElementById('regPass').value.trim();
+      if (App.register(email, pass)) {
+        App.showMsg(msg, '✅ Registrace úspěšná. Nyní se přihlaste.', 'ok');
+        panelRegister.classList.add('hidden'); panelLogin.classList.remove('hidden');
+        document.getElementById('loginEmail').value = email;
+        document.getElementById('loginPass').focus();
+      }
+      else App.showMsg(msg, '⚠️ Účet s tímto e-mailem již existuje.', 'error');
+    });
+  </script>
+</body>
+</html>

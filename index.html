@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="cs">
+<head>
+  <meta charset="utf-8" />
+  <title>AnimeCloud — Úvod</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="styles/main.css" />
+  <style>
+    /* velký cover 190×570 */
+    .cover-tall{width:190px;height:570px;object-fit:cover;object-position:center;border-radius:12px;background:var(--border);display:block;margin:0 auto;}
+    .anime-card{display:flex;flex-direction:column;align-items:center;gap:.6rem;text-align:center;padding:.8rem;cursor:pointer;text-decoration:none;color:inherit}
+    .anime-title{font-weight:600;}
+    .anime-meta{color:var(--muted);font-size:.95rem;}
+
+    /* hlavička sekce */
+    .row-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:24px;}
+    .actions{display:flex;align-items:center;gap:8px}
+    .search{display:none}
+    .search input{min-width:260px;background:#12122b;color:var(--text);border:1px solid var(--border);border-radius:8px;padding:.45rem .6rem}
+    :root[data-theme="light"] .search input{background:#fff}
+
+    /* grid pro obálky – min 190px */
+    #anime-grid{grid-template-columns:repeat(auto-fill,minmax(190px,1fr))}
+
+    /* pager */
+    .pager{display:flex;align-items:center;justify-content:center;gap:10px;margin-top:12px}
+    .pager button{min-width:42px}
+    .pager .page-num{min-width:36px;text-align:center}
+    .center-row{display:flex;justify-content:center;margin-top:12px}
+
+    @media (max-width:700px){
+      .row-head{ margin-bottom:16px; }
+    }
+
+    .anime-card:hover { transform: translateY(-4px); box-shadow: 0 6px 16px rgba(0,0,0,0.25); }
+    .anime-card img { transition: transform .3s; }
+    .anime-card:hover img { transform: scale(1.03); }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="brand">
+      <img src="assets/logo.svg" alt="AnimeCloud" />
+    </a>
+    <nav class="top-nav">
+      <a href="index.html" aria-current="page">Info</a>
+      <a href="upload.html" id="nav-upload" class="hidden">Upload</a>
+      <a href="feedback.html" id="nav-feedback" class="hidden">Feedback</a>
+      <a href="account.html" id="nav-account" class="hidden">Účet</a>
+      <a href="login.html" id="nav-login">Přihlášení</a>
+      <a href="admin.html" id="nav-admin" class="hidden">Admin</a>
+      <a href="#" id="nav-theme" title="Přepnout téma">🌓</a>
+    </nav>
+  </header>
+
+  <main class="container">
+    <h1>Vítej v AnimeCloud (offline)</h1>
+
+    <div class="card">
+      <h2>Statistiky</h2>
+      <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(180px,1fr)); gap: 12px;">
+        <div class="card"><strong>Počet anime</strong><div id="stat-anime" class="muted">–</div></div>
+        <div class="card"><strong>Registrovaní uživatelé</strong><div id="stat-users" class="muted">–</div></div>
+        <div class="card"><strong>Celkem nahrávek</strong><div id="stat-uploads" class="muted">–</div></div>
+        <div class="card"><strong>Nejaktivnější anime</strong><div id="stat-top-anime" class="muted">–</div></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row-head">
+        <h2 style="margin:0">Katalog anime</h2>
+        <div class="actions">
+          <div class="search" id="searchWrap">
+            <input id="searchInput" type="text" placeholder="Hledat: title / genres / studio / year" />
+          </div>
+        </div>
+      </div>
+
+      <div id="anime-grid" class="grid anime"></div>
+
+      <!-- tlačítko pod úvodní čtveřicí -->
+      <div id="teaserMoreRow" class="center-row">
+        <button id="btnTeaserMore">Zobrazit další</button>
+      </div>
+
+      <!-- stránkování dole (zobrazí se po kliknutí na 'Zobrazit další') -->
+      <div id="pager" class="pager hidden">
+        <button id="btnPrev" aria-label="Předchozí">‹</button>
+        <span id="pageNum" class="page-num">1</span>
+        <button id="btnNext" aria-label="Další">›</button>
+      </div>
+    </div>
+  </main>
+
+  <footer class="site-footer"><small>AnimeCloud • Offline verze</small></footer>
+
+  <script src="scripts/app.js"></script>
+  <script>
+    App.initNavbar();
+
+    // --- helpery ---
+    const strip = (s)=> (s||'').toString().normalize('NFD').replace(/\p{Diacritic}/gu,'').toLowerCase();
+    const debounce = (fn,ms)=>{let t;return (...a)=>{clearTimeout(t);t=setTimeout(()=>fn(...a),ms)}};
+
+    (async function(){
+      const anime = await App.fetchAnime('data/anime.json');
+      const uploads = App.getUploads();
+
+      // STATISTIKY
+      const users = JSON.parse(localStorage.getItem('animecloud_users') || '{}');
+      document.getElementById('stat-anime').textContent = String(anime.length);
+      document.getElementById('stat-users').textContent = String(Object.keys(users).length);
+      document.getElementById('stat-uploads').textContent = String(uploads.length);
+
+      // unikátní epizody per anime (pro řazení i statistiky)
+      const uniqKey = {};
+      uploads.forEach(u => { uniqKey[`${u.slug}#${u.episode}`] = 1; });
+      const uploadedPerAnime = {};
+      Object.keys(uniqKey).forEach(k => {
+        const slug = k.split('#')[0];
+        uploadedPerAnime[slug] = (uploadedPerAnime[slug] || 0) + 1;
+      });
+
+      const top = Object.entries(uploadedPerAnime).sort((a,b)=>b[1]-a[1])[0];
+      document.getElementById('stat-top-anime').textContent = top ? `${top[0]} — ${top[1]} dílů` : '—';
+
+      // seřadíme anime podle nahraných dílů (desc), fallback podle názvu
+      const sorted = anime.slice().sort((a,b)=>{
+        const ca = uploadedPerAnime[a.slug] || 0;
+        const cb = uploadedPerAnime[b.slug] || 0;
+        if (cb !== ca) return cb - ca;
+        return a.title.localeCompare(b.title, 'cs');
+      });
+
+      // DOM refs
+      const grid = document.getElementById('anime-grid');
+      const teaserMoreRow = document.getElementById('teaserMoreRow');
+      const btnTeaserMore = document.getElementById('btnTeaserMore');
+      const pager = document.getElementById('pager');
+      const btnPrev = document.getElementById('btnPrev');
+      const btnNext = document.getElementById('btnNext');
+      const pageNum = document.getElementById('pageNum');
+      const searchWrap = document.getElementById('searchWrap');
+      const searchInput = document.getElementById('searchInput');
+
+      // STAV
+      let mode = 'teaser'; // 'teaser' | 'paged'
+      const pageSize = 20;
+      let page = 1;
+      let filtered = sorted.slice(); // pro search
+
+      // RENDERERY
+      function cardHTML(a){
+        const x = uploadedPerAnime[a.slug] || 0;
+        const y = a.episodes;
+        const coverSrc = 'assets/' + (a.cover || '');
+        return `
+          <a href="#" class="card anime-card" data-slug="${a.slug}">
+            <img class="cover-tall" loading="lazy" src="${coverSrc}" alt="${a.title}" onerror="this.src='assets/logo.svg'">
+            <div class="anime-title">${a.title}</div>
+            <div class="anime-meta">${x}/${y} dílů nahráno</div>
+          </a>
+        `;
+      }
+
+      function renderTeaser(){
+        const first4 = sorted.slice(0,4);
+        grid.innerHTML = first4.map(cardHTML).join('');
+        teaserMoreRow.classList.remove('hidden');
+        pager.classList.add('hidden');
+        // skryj search (zobrazí se až když se přejde do paged)
+        searchWrap.style.display = 'none';
+        attachCardClicks();
+        // pokud máme ≤4 položky, schovej tlačítko
+        if (sorted.length <= 4) { teaserMoreRow.classList.add('hidden'); }
+      }
+
+      function totalPages(){ return Math.max(1, Math.ceil(filtered.length / pageSize)); }
+
+      function renderPaged(){
+        const start = (page-1)*pageSize;
+        const slice = filtered.slice(start, start + pageSize);
+        grid.innerHTML = slice.map(cardHTML).join('') || '<p class="muted">Nic k zobrazení.</p>';
+        teaserMoreRow.classList.add('hidden');
+        pager.classList.remove('hidden');
+        pageNum.textContent = String(page);
+        btnPrev.disabled = (page <= 1);
+        btnNext.disabled = (page >= totalPages());
+        attachCardClicks();
+      }
+
+      function attachCardClicks(){
+        const isLogged = !!App.auth().email;
+        grid.querySelectorAll('.anime-card').forEach(el=>{
+          el.addEventListener('click', (e)=>{
+            e.preventDefault();
+            if (!isLogged) { App.toast('Pro nahrání se přihlas.', 'error'); return; }
+            const slug = el.getAttribute('data-slug');
+            // ulož předvolbu a jdi na upload
+            localStorage.setItem('preselect_anime', slug);
+            location.href = 'upload.html';
+          });
+        });
+      }
+
+      // start: teaser
+      renderTeaser();
+
+      // klik na "Zobrazit další" → přepnout do stránkování
+      btnTeaserMore.addEventListener('click', ()=>{
+        mode = 'paged';
+        page = 1; // 1. stránka = 20 kusů (včetně těch prvních 4)
+        // zobraz vyhledávání
+        searchWrap.style.display = 'block';
+        renderPaged();
+      });
+
+      // pager
+      btnPrev.addEventListener('click', ()=>{ if (page>1){ page--; renderPaged(); }});
+      btnNext.addEventListener('click', ()=>{ if (page<totalPages()){ page++; renderPaged(); }});
+
+      // vyhledávání (fulltext přes title/genres/studio/year)
+      const onSearch = debounce(()=>{
+        const q = strip(searchInput.value);
+        filtered = sorted.filter(a=>{
+          if (!q) return true;
+          const hay = [
+            a.title,
+            (a.genres||[]).join(' '),
+            a.studio,
+            String(a.year)
+          ].map(strip).join(' ');
+          return hay.includes(q);
+        });
+        page = 1;
+        if (mode === 'teaser'){
+          // někdo vyhledává v teaser módu → přepni na paged
+          mode = 'paged';
+          searchWrap.style.display='block';
+        }
+        renderPaged();
+      }, 200);
+      searchInput.addEventListener('input', onSearch);
+    })();
+  </script>
+</body>
+</html>
