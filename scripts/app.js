@@ -170,34 +170,13 @@ function getUploadCountByQuality(slug, ep, q){
 }
 
 // ===== Anime data =====
-async function fetchAnime(path='data/anime.json'){
-  // 1) zkus cloud (když máme CLOUD_BASE)
-  const cloud = (window.CLOUD_BASE ? (window.CLOUD_BASE.replace(/\/+$/,'') + '/data/anime.json') : null);
-
-  async function tryFetch(url){
-    const r = await fetch(url, { cache:'no-cache' });
-    if (!r.ok) throw new Error('HTTP '+r.status);
-    return await r.json();
-  }
-
-  let base = [];
-  if (cloud){
-    try { base = await tryFetch(cloud); }
-    catch { /* spadne? zkusíme lokál */ }
-  }
-  if (!base.length){
-    try { base = await tryFetch(path); }
-    catch { base = []; }
-  }
-
-  // 2) mergni lokální “custom” záznamy (co admin přidal, ať to vidí i offline)
-  const storeKey = 'animecloud_custom_anime';
-  const local = JSON.parse(localStorage.getItem(storeKey) || '[]') || [];
-  // přepiš cloudové stejnojmenné slugy lokální verzí
-  const map = new Map(base.map(a => [a.slug, a]));
-  for (const a of local){ map.set(a.slug, a); }
-  return Array.from(map.values());
+async function fetchAnime(path){
+  const base = (typeof window !== 'undefined' && window.CLOUD_BASE) ? window.CLOUD_BASE : '';
+  const url = base ? `${base}/meta/anime.json?ts=${Date.now()}` : (path || 'data/anime.json');
+  const r = await fetch(url, { cache: 'no-cache' });
+  return await r.json();
 }
+
 function populateSelectWithPlaceholder(sel, text='— vyber z možností —'){
   sel.innerHTML='';
   const op=document.createElement('option'); op.value=''; op.disabled=true; op.selected=true; op.textContent=text; sel.appendChild(op);
@@ -343,4 +322,5 @@ window.App = {
   uploadToServer, handleUploadClick
 };
 // ===================== /app.js =====================
+
 
