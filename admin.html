@@ -396,14 +396,16 @@
 
         // 2) server: zapsat do data/anime.json
         try{
-          const resp = await fetch(App.api('/admin/add_anime'), {
-            method:'POST',
-            headers:{'Content-Type':'application/json'},
-            body: JSON.stringify({ slug, title, episodes, genres, description, cover, status, year, studio })
-          });
+          const resp = await fetch('/admin/add_anime', { ... });
           if (!resp.ok){
             const tt = await resp.text().catch(()=> '');
             return App.showMsg(msgEl, '⚠️ Nepodařilo se zapsat do anime.json: ' + (tt||resp.status), 'error');
+          }
+          const payload = await resp.json();
+          if (payload.anime_json){
+            App.toast('anime.json publikován do cloudu','ok');
+          } else if (payload.warning){
+            App.toast('Uloženo, ale nepodařilo se publikovat do cloudu','error');
           }
         } catch(err){
           return App.showMsg(msgEl,'⚠️ Chyba spojení při zápisu do anime.json.','error');
@@ -424,6 +426,7 @@
   </script>
 </body>
 </html>
+
 
 
 
