@@ -172,7 +172,7 @@ function getUploadCountByQuality(slug, ep, q){
 // ===== Anime data =====
 async function fetchAnime(path){
   const base = (typeof window !== 'undefined' && window.CLOUD_BASE) ? window.CLOUD_BASE : '';
-  const url = base ? `${base}/meta/anime.json?ts=${Date.now()}` : (path || 'data/anime.json');
+  const url = base ? `${base}/data/anime.json?ts=${Date.now()}` : (path || 'data/anime.json');
   const r = await fetch(url, { cache: 'no-cache' });
   return await r.json();
 }
@@ -322,5 +322,6 @@ window.App = {
   uploadToServer, handleUploadClick
 };
 // ===================== /app.js =====================
+
 
 
