@@ -6,13 +6,35 @@ from email.policy import default as email_default
 from urllib.parse import quote
 from dotenv import load_dotenv
 
+# GCS
+from google.cloud import storage
+
 # === ENV ===
 load_dotenv()  # načti .env pokud existuje
 
-# === SUPABASE CONFIG ===
-SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
-SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE", "")
-SUPABASE_BUCKET = os.getenv("SUPABASE_BUCKET", "anime-cloud")
+# === GCS CONFIG ===
+# .env:
+#   GCS_BUCKET=anime-cloud
+#   GOOGLE_APPLICATION_CREDENTIALS=/root/anime-cloud/gcs-key.json
+GCS_BUCKET = os.getenv("GCS_BUCKET", "anime-cloud")
+GOOGLE_APPLICATION_CREDENTIALS = os.getenv(
+    "GOOGLE_APPLICATION_CREDENTIALS", "/root/anime-cloud/gcs-key.json"
+)
+
+_gcs_client = None
+def gcs_client():
+    global _gcs_client
+    if _gcs_client is None:
+        # Client si vezme klíče z GOOGLE_APPLICATION_CREDENTIALS
+        _gcs_client = storage.Client()
+    return _gcs_client
+
+def upload_to_gcs(path_in_bucket: str, raw: bytes, mime: str) -> str:
+    """Nahraje bytes do GCS a vrátí veřejnou URL (Uniform access + allUsers:Viewer)."""
+    bucket = gcs_client().bucket(GCS_BUCKET)
+    blob = bucket.blob(path_in_bucket)
+    blob.upload_from_string(raw, content_type=mime)
+    return f"https://storage.googleapis.com/{GCS_BUCKET}/{path_in_bucket}"
 
 # === PATHS ===
 ROOT = os.getcwd()
@@ -77,39 +99,12 @@ def guess_mime(filename: str, sniff: bytes | None = None, default: str = "applic
         if fn.endswith(ext):
             return mime
     if sniff:
-        # jednoduché „magic bytes“
         if sniff.startswith(b"\x89PNG"): return "image/png"
         if sniff[:3] == b"\xff\xd8\xff": return "image/jpeg"
         if sniff.startswith(b"RIFF") and b"WEBP" in sniff[:16]: return "image/webp"
-        if sniff[:4] == b"\x1a\x45\xdf\xa3": return "video/x-matroska"   # mkv
+        if sniff[:4] == b"\x1a\x45\xdf\xa3": return "video/x-matroska"
         if sniff[:4] == b"ftyp": return "video/mp4"
     return default
-
-# === SUPABASE UPLOAD ===
-def supabase_public_url(path_in_bucket: str) -> str:
-    # path musí být URL-encoded, ale lomítka ponecháme
-    parts = [quote(p) for p in path_in_bucket.split("/")]
-    return f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_BUCKET}/{'/'.join(parts)}"
-
-def upload_to_supabase(path_in_bucket: str, raw: bytes, mime: str, overwrite: bool = True) -> str:
-    """Nahraje bytes do Supabase Storage a vrátí veřejnou URL."""
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        raise RuntimeError("Supabase credentials missing (SUPABASE_URL/SUPABASE_SERVICE_ROLE).")
-    url = f"{SUPABASE_URL}/storage/v1/object/{SUPABASE_BUCKET}/{path_in_bucket}"
-    headers = {
-        "Authorization": f"Bearer {SUPABASE_KEY}",
-        "Content-Type": mime or "application/octet-stream",
-        "x-upsert": "true" if overwrite else "false",
-        # volitelné cache:
-        "cache-control": "public, max-age=31536000, immutable",
-    }
-    try:
-        r = requests.post(url, headers=headers, data=raw, timeout=60)
-    except requests.RequestException as e:
-        raise RuntimeError(f"Upload request failed: {e}")
-    if not r.ok and r.status_code != 409:
-        raise RuntimeError(f"Upload failed {r.status_code}: {r.text}")
-    return supabase_public_url(path_in_bucket)
 
 # === DATA URL COVER ===
 DATAURL_RE = re.compile(r"^data:(?P<mime>[\w/+.-]+);base64,(?P<b64>.*)$", re.DOTALL)
@@ -127,7 +122,7 @@ def save_cover_from_dataurl(data_url: str, slug: str) -> str:
         "image/gif": "gif",
     }.get(mime, "jpg")
     path_in_bucket = f"covers/{safe_name(slug)}.{ext}"
-    return upload_to_supabase(path_in_bucket, raw, mime)
+    return upload_to_gcs(path_in_bucket, raw, mime)
 
 # === MULTIPART PARSER ===
 def parse_multipart_request(handler):
@@ -193,40 +188,33 @@ class Handler(SimpleHTTPRequestHandler):
         if not all([anime, episode, quality, video, videoName]):
             return json_response(self, 400, {"ok": False, "error": "Missing required fields"})
 
-        # hezky formát složek: anime/<slug>/<00001>/<quality>/<file>
         ep_folder = f"{int(episode):05d}"
         vname = safe_name(videoName)
         sname = safe_name(subsName or "subs.srt")
 
-        # MIME detekce
         v_mime = guess_mime(vname, sniff=video[:8] if isinstance(video, (bytes, bytearray)) else None, default="video/mp4")
         s_mime = guess_mime(sname, sniff=subs[:8] if isinstance(subs, (bytes, bytearray)) else None, default="application/x-subrip")
 
-        # pokud nechceš přepisovat, přidej suffix
         def avoid_collision(path_in_bucket: str) -> str:
             if not path_in_bucket:
                 return path_in_bucket
             base, dot, ext = path_in_bucket.partition(".")
-            # přidáme hash suffix pro jistotu unikátnosti
             return f"{base}-{hashlib.sha1(os.urandom(8)).hexdigest()[:6]}{('.' + ext) if dot else ''}"
 
         video_path = f"anime/{anime}/{ep_folder}/{quality}/{vname}"
         subs_path  = f"anime/{anime}/{ep_folder}/{quality}/{sname}"
 
         try:
-            video_url = upload_to_supabase(video_path, video, v_mime, overwrite=True)
-        except RuntimeError as e:
-            # zkus bez přepisu s unik. názvem
-            video_path2 = avoid_collision(video_path)
-            video_url = upload_to_supabase(video_path2, video, v_mime, overwrite=False)
+            video_url = upload_to_gcs(video_path, video, v_mime)
+        except Exception:
+            video_url = upload_to_gcs(avoid_collision(video_path), video, v_mime)
 
         subs_url = None
         if subs:
             try:
-                subs_url = upload_to_supabase(subs_path, subs, s_mime, overwrite=True)
-            except RuntimeError:
-                subs_path2 = avoid_collision(subs_path)
-                subs_url = upload_to_supabase(subs_path2, subs, s_mime, overwrite=False)
+                subs_url = upload_to_gcs(subs_path, subs, s_mime)
+            except Exception:
+                subs_url = upload_to_gcs(avoid_collision(subs_path), subs, s_mime)
 
         return json_response(self, 200, {"ok": True, "video": video_url, "subs": subs_url})
 
@@ -244,7 +232,7 @@ class Handler(SimpleHTTPRequestHandler):
             json.dump(data, f, ensure_ascii=False, indent=2)
         return json_response(self, 200, {"ok": True})
 
-    # --- Wipe (cloud neděláme) ---
+    # --- Wipe ---
     def handle_wipe_all(self):
         try:
             length = int(self.headers.get("Content-Length", "0"))
@@ -253,7 +241,7 @@ class Handler(SimpleHTTPRequestHandler):
             return json_response(self, 400, {"ok": False, "error": "Invalid JSON"})
         if payload.get("password") != WIPE_PASSWORD:
             return json_response(self, 403, {"ok": False, "error": "Forbidden"})
-        return json_response(self, 200, {"ok": True, "status": "cloud wipe disabled (Supabase)"})
+        return json_response(self, 200, {"ok": True, "status": "cloud wipe disabled (GCS)"})
 
     # --- Add/Update anime metadat ---
     def handle_add_anime(self):
@@ -309,7 +297,6 @@ class Handler(SimpleHTTPRequestHandler):
 
         sniff = bytes(cover[:12]) if isinstance(cover, (bytes, bytearray)) else None
         ext_mime = guess_mime("cover.bin", sniff=sniff, default="image/jpeg")
-        # vyber příponu z MIME
         ext = {
             "image/png": "png",
             "image/webp": "webp",
@@ -319,7 +306,7 @@ class Handler(SimpleHTTPRequestHandler):
 
         fname = f"{safe_name(slug)}.{ext}"
         try:
-            url = upload_to_supabase(f"covers/{fname}", cover, ext_mime, overwrite=True)
+            url = upload_to_gcs(f"covers/{fname}", cover, ext_mime)
             return json_response(self, 200, {"ok": True, "path": url})
         except Exception as e:
             return json_response(self, 500, {"ok": False, "error": str(e)})
