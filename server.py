@@ -173,6 +173,20 @@ def upload_fileobj(path_in_bucket: str, fileobj, mime: str, overwrite: bool = Tr
     data = fileobj.read()
     return upload_to_supabase(path_in_bucket, data, mime, overwrite)
 
+def publish_anime_json():
+    """
+    Nahraje lokální data/anime.json do cloudu na stejnou cestu (data/anime.json).
+    Vrátí public URL (GCS nebo Supabase).
+    """
+    path = ANIME_JSON
+    if not os.path.exists(path):
+        raise RuntimeError("anime.json neexistuje")
+    with open(path, "rb") as f:
+        raw = f.read()
+    url = upload_bytes("data/anime.json", raw, "application/json", overwrite=True)
+    print(f"[publish_anime_json] uploaded → {url}")
+    return url
+    
 # =========================
 # DATA URL → cover do cloudu
 # =========================
@@ -416,8 +430,15 @@ class Handler(SimpleHTTPRequestHandler):
         items = [a for a in items if a.get("slug") != slug]
         items.append(item)
         save_json(ANIME_JSON, items)
-        return json_response(self, 200, {"ok": True, "saved": item})
 
+        # ⬇️ Nově: publikace anime.json do cloudu
+        try:
+            published_url = publish_anime_json()
+        except Exception as e:
+            # publikace do cloudu se nepovedla – vrátíme OK, ale s varováním
+            return json_response(self, 200, {"ok": True, "saved": item, "warning": f"anime.json not published: {e}"})
+
+        return json_response(self, 200, {"ok": True, "saved": item, "anime_json": published_url})
     # --------- /admin/upload_cover (malý multipart) ----------
     def handle_upload_cover(self):
         fields = parse_multipart_request(self)
@@ -454,4 +475,5 @@ def run():
 
 if __name__ == "__main__":
     run()
+
 
