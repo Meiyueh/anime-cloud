@@ -1,23 +1,27 @@
 #!/usr/bin/env python3
-import os, json, shutil, re, base64
+import os, json, re, base64, shutil, requests
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from email.parser import BytesParser
 from email.policy import default as email_default
 
+# === SUPABASE CONFIG ===
+SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
+SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE", "")
+SUPABASE_BUCKET = os.getenv("SUPABASE_BUCKET", "anime-cloud")
+
+# === PATHS ===
 ROOT = os.getcwd()
-UPLOAD_ROOT   = os.path.join(ROOT, 'uploads')
-FEEDBACK_DIR  = os.path.join(ROOT, 'feedback')
-DATA_DIR      = os.path.join(ROOT, 'data')
-ANIME_JSON    = os.path.join(DATA_DIR, 'anime.json')
-COVERS_DIR    = os.path.join(ROOT, 'assets', 'covers')
+DATA_DIR = os.path.join(ROOT, "data")
+ANIME_JSON = os.path.join(DATA_DIR, "anime.json")
 WIPE_PASSWORD = "789456123Lol"
 
+# === HELPERS ===
 def safe_name(name: str) -> str:
     if isinstance(name, bytes):
-        name = name.decode('utf-8', 'ignore')
+        name = name.decode("utf-8", "ignore")
     keep = "._-()[]{}@+&= "
     name = "".join(ch for ch in name if ch.isalnum() or ch in keep)
-    name = name.replace('/', '').replace('\\', '')
+    name = name.replace("/", "").replace("\\", "")
     return name.strip() or "file"
 
 def json_response(handler, status, obj):
@@ -34,88 +38,72 @@ def load_json(path, default):
         return default
 
 def save_json(path, data):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
     os.replace(tmp, path)
 
-def ensure_dirs():
-    os.makedirs(UPLOAD_ROOT, exist_ok=True)
-    os.makedirs(FEEDBACK_DIR, exist_ok=True)
-    os.makedirs(DATA_DIR, exist_ok=True)
-    os.makedirs(COVERS_DIR, exist_ok=True)
+# === SUPABASE UPLOAD ===
+def upload_to_supabase(path_in_bucket: str, raw: bytes, mime: str) -> str:
+    """Nahraje bytes do Supabase Storage a vrátí veřejnou URL."""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        raise RuntimeError("Supabase credentials missing")
+    url = f"{SUPABASE_URL}/storage/v1/object/{SUPABASE_BUCKET}/{path_in_bucket}"
+    r = requests.post(
+        url,
+        headers={"Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": mime},
+        data=raw,
+    )
+    if not r.ok and r.status_code != 409:  # 409 = soubor už existuje (ignore)
+        raise RuntimeError(f"Upload failed {r.status_code}: {r.text}")
+    return f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_BUCKET}/{path_in_bucket}"
 
+# === DATA URL COVER ===
 DATAURL_RE = re.compile(r"^data:(?P<mime>[\w/+.-]+);base64,(?P<b64>.*)$", re.DOTALL)
-
 def save_cover_from_dataurl(data_url: str, slug: str) -> str:
-    """
-    Uloží cover z data URL do assets/covers/<slug>.<ext> a vrátí relativní cestu (covers/xxx.ext).
-    """
     m = DATAURL_RE.match(data_url.strip())
     if not m:
         raise ValueError("Invalid data URL")
     mime = m.group("mime").lower()
-    b64 = m.group("b64")
-    try:
-        raw = base64.b64decode(b64, validate=True)
-    except Exception:
-        raise ValueError("Invalid base64 in data URL")
-
+    raw = base64.b64decode(m.group("b64"), validate=True)
     ext = {
-        'image/jpeg': 'jpg', 'image/jpg': 'jpg',
-        'image/png': 'png',  'image/webp': 'webp', 'image/gif': 'gif'
-    }.get(mime, 'bin')
+        "image/jpeg": "jpg",
+        "image/jpg": "jpg",
+        "image/png": "png",
+        "image/webp": "webp",
+        "image/gif": "gif",
+    }.get(mime, "jpg")
+    path_in_bucket = f"covers/{safe_name(slug)}.{ext}"
+    return upload_to_supabase(path_in_bucket, raw, mime)
 
-    fname = f"{safe_name(slug)}.{ext}"
-    fpath = os.path.join(COVERS_DIR, fname)
-    with open(fpath, "wb") as f:
-        f.write(raw)
-    rel = os.path.join("covers", fname).replace("\\", "/")
-    return rel
-
-# ---------- Pomocný multipart parser (bez modulu cgi; funguje v Py 3.13) ----------
+# === MULTIPART PARSER ===
 def parse_multipart_request(handler):
-    """
-    Vrátí dict { name: value } kde value je:
-      - str pro textová pole (dekódovaná podle charsetu, default utf-8)
-      - bytes pro binární pole (soubory)
-    Pozn.: názvy souborů posíláš zvlášť jako videoName/subsName, takže filename nepotřebujeme.
-    """
     length = int(handler.headers.get("Content-Length", "0") or "0")
-    body = handler.rfile.read(length) if length > 0 else b""
-
+    body = handler.rfile.read(length)
     ctype = handler.headers.get("Content-Type", "")
-    # vytvoříme pseudo hlavičky pro email parser
     headers_bytes = f"Content-Type: {ctype}\r\nMIME-Version: 1.0\r\n\r\n".encode("utf-8")
     msg = BytesParser(policy=email_default).parsebytes(headers_bytes + body)
-
     fields = {}
     if msg.is_multipart():
         for part in msg.iter_parts():
-            # jméno pole z Content-Disposition
-            name = part.get_param('name', header='content-disposition')
+            name = part.get_param("name", header="content-disposition")
             if not name:
                 continue
             filename = part.get_filename()
-            payload = part.get_payload(decode=True)  # bytes
-
+            payload = part.get_payload(decode=True)
             if filename is None:
-                # textové pole: zkusíme dekódovat
-                charset = part.get_content_charset() or 'utf-8'
+                charset = part.get_content_charset() or "utf-8"
                 try:
-                    value = payload.decode(charset, errors='ignore')
+                    value = payload.decode(charset, errors="ignore")
                 except Exception:
-                    value = payload.decode('utf-8', errors='ignore')
+                    value = payload.decode("utf-8", errors="ignore")
                 fields[name] = value
             else:
-                # binární pole (soubor)
                 fields[name] = payload
-    else:
-        # fallback: není multipart
-        pass
-
     return fields
 
+# === HANDLER ===
 class Handler(SimpleHTTPRequestHandler):
     def end_headers(self):
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -124,231 +112,113 @@ class Handler(SimpleHTTPRequestHandler):
         super().end_headers()
 
     def do_OPTIONS(self):
-        self.send_response(200); self.end_headers()
+        self.send_response(200)
+        self.end_headers()
 
     def do_POST(self):
-        if self.path == "/upload":
-            return self.handle_upload()
-        elif self.path == "/feedback":
-            return self.handle_feedback()
-        elif self.path == "/wipe_all":
-            return self.handle_wipe_all()
-        elif self.path == "/admin/add_anime":
-            return self.handle_add_anime()
-        elif self.path == "/admin/upload_cover":
-            return self.handle_upload_cover()
-        else:
-            self.send_error(404, "Not found")
+        match self.path:
+            case "/upload": self.handle_upload()
+            case "/feedback": self.handle_feedback()
+            case "/wipe_all": self.handle_wipe_all()
+            case "/admin/add_anime": self.handle_add_anime()
+            case "/admin/upload_cover": self.handle_upload_cover()
+            case _: self.send_error(404, "Not found")
 
-    def do_DELETE(self):
-        if self.path == "/delete":
-            return self.handle_delete()
-        else:
-            self.send_error(404, "Not found")
-
-    # ---------- Upload videí a titulků ----------
+    # --- Upload video/subs ---
     def handle_upload(self):
-        if not (self.headers.get("Content-Type","").startswith("multipart/form-data")):
-            self.send_error(400, "Content-Type must be multipart/form-data"); return
-
         fields = parse_multipart_request(self)
-
-        anime     = fields.get("anime")
-        episode   = fields.get("episode")
-        quality   = fields.get("quality")
-        video     = fields.get("video")        # bytes
+        anime = fields.get("anime")
+        episode = fields.get("episode")
+        quality = fields.get("quality")
+        video = fields.get("video")
         videoName = fields.get("videoName")
-        subs      = fields.get("subs")         # bytes (optional)
-        subsName  = fields.get("subsName")
+        subs = fields.get("subs")
+        subsName = fields.get("subsName")
 
-        if isinstance(anime, bytes): anime = anime.decode('utf-8','ignore')
-        if isinstance(episode, bytes): episode = episode.decode('utf-8','ignore')
-        if isinstance(quality, bytes): quality = quality.decode('utf-8','ignore')
-        if isinstance(videoName, bytes): videoName = videoName.decode('utf-8','ignore')
-        if isinstance(subsName, bytes): subsName = subsName.decode('utf-8','ignore')
-
-        if not (anime and episode and quality and isinstance(video, (bytes, bytearray)) and videoName):
-            self.send_error(400, "Missing required fields"); return
-
-        videoName = safe_name(videoName)
-        if subsName: subsName = safe_name(subsName)
+        if not all([anime, episode, quality, video, videoName]):
+            return self.send_error(400, "Missing required fields")
 
         ep_folder = f"{int(episode):05d}"
-        target_dir = os.path.join(UPLOAD_ROOT, anime, ep_folder, quality)
-        os.makedirs(target_dir, exist_ok=True)
+        videoName = safe_name(videoName)
+        video_path = f"anime/{anime}/{ep_folder}/{quality}/{videoName}"
+        subs_path = f"anime/{anime}/{ep_folder}/{quality}/{safe_name(subsName or 'subs.srt')}"
 
-        video_path = os.path.join(target_dir, videoName)
-        if os.path.exists(video_path):
-            self.send_error(409, "File already exists"); return
-        with open(video_path, "wb") as f:
-            f.write(video)
-
-        if subs and subsName:
-            subs_path = os.path.join(target_dir, subsName)
-            with open(subs_path, "wb") as f:
-                f.write(subs)
-
-        json_response(self, 200, {"status": "ok"})
-
-    # ---------- Mazání nahrávky ----------
-    def handle_delete(self):
-        length = int(self.headers.get("Content-Length", "0"))
-        raw = self.rfile.read(length)
         try:
-            data = json.loads(raw)
-            anime = data["anime"]
-            ep    = f"{int(data['episode']):05d}"
-            q     = data["quality"]
-            vname = data["videoName"]
-        except Exception:
-            self.send_error(400, "Invalid JSON or missing fields"); return
+            video_url = upload_to_supabase(video_path, video, "video/mp4")
+            subs_url = None
+            if subs:
+                subs_url = upload_to_supabase(subs_path, subs, "application/x-subrip")
+            json_response(self, 200, {"status": "ok", "video": video_url, "subs": subs_url})
+        except Exception as e:
+            json_response(self, 500, {"status": "error", "message": str(e)})
 
-        folder = os.path.join(UPLOAD_ROOT, anime, ep, q)
-        video_path = os.path.join(folder, vname)
-        base, _ = os.path.splitext(vname)
-        subs_path = os.path.join(folder, base + ".srt")
-
-        ok = False
-        if os.path.exists(video_path):
-            os.remove(video_path); ok = True
-        if os.path.exists(subs_path):
-            os.remove(subs_path); ok = True
-
-        json_response(self, 200 if ok else 404, {"status": "ok" if ok else "not_found"})
-
-    # ---------- Feedback ----------
+    # --- Feedback ---
     def handle_feedback(self):
         length = int(self.headers.get("Content-Length", "0"))
-        raw = self.rfile.read(length)
-        try:
-            data = json.loads(raw)
-        except Exception:
-            self.send_error(400, "Invalid JSON"); return
-
-        os.makedirs(FEEDBACK_DIR, exist_ok=True)
-        ts = int(data.get("ts") or 0) or 0
-        fid = data.get("id") or f"{ts}"
-        fname = os.path.join(FEEDBACK_DIR, f"{fid}.json")
-        with open(fname, "w", encoding="utf-8") as f:
+        data = json.loads(self.rfile.read(length))
+        os.makedirs("feedback", exist_ok=True)
+        with open(f"feedback/{data.get('id','feedback')}.json", "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
-
         self.send_response(200); self.end_headers()
 
-    # ---------- Wipe uploads ----------
+    # --- Wipe ---
     def handle_wipe_all(self):
         length = int(self.headers.get("Content-Length", "0"))
-        raw = self.rfile.read(length)
-        try:
-            payload = json.loads(raw)
-            pwd = payload.get("password","")
-        except Exception:
-            self.send_error(400, "Invalid JSON"); return
-
-        if pwd != WIPE_PASSWORD:
+        payload = json.loads(self.rfile.read(length))
+        if payload.get("password") != WIPE_PASSWORD:
             self.send_error(403, "Forbidden"); return
+        json_response(self, 200, {"status": "cloud wipe disabled (Supabase)"})
 
-        if os.path.isdir(UPLOAD_ROOT):
-            shutil.rmtree(UPLOAD_ROOT, ignore_errors=True)
-        os.makedirs(UPLOAD_ROOT, exist_ok=True)
-
-        json_response(self, 200, {"status":"wiped"})
-
-    # ---------- Admin: přidání/aktualizace anime ----------
+    # --- Add anime ---
     def handle_add_anime(self):
         length = int(self.headers.get("Content-Length", "0"))
-        raw = self.rfile.read(length)
-        try:
-            body = json.loads(raw.decode("utf-8"))
-        except Exception:
-            return json_response(self, 400, {"ok": False, "error": "Invalid JSON"})
-
-        required = ["slug","title","episodes","genres","description","cover","status","year","studio"]
-        if not all(k in body for k in required):
-            return json_response(self, 400, {"ok": False, "error": "Missing required fields"})
-
-        slug  = safe_name(str(body["slug"]).strip().lower())
-        title = str(body["title"]).strip()
-        try:
-            episodes = int(body["episodes"])
-            year     = int(body["year"])
-        except Exception:
-            return json_response(self, 400, {"ok": False, "error": "episodes/year must be numbers"})
-
-        genres = body["genres"]
-        if not isinstance(genres, list) or not all(isinstance(x, str) and x.strip() for x in genres):
-            return json_response(self, 400, {"ok": False, "error": "genres must be non-empty list of strings"})
-
-        description = str(body["description"]).strip()
-        status      = str(body["status"]).strip()
-        studio      = str(body["studio"]).strip()
-        cover_in    = body["cover"]
-
-        # cover: data-url → lokální soubor; jinak bereme jako cestu/URL
+        body = json.loads(self.rfile.read(length).decode("utf-8"))
+        slug = safe_name(body["slug"].lower())
+        cover_in = body.get("cover")
         try:
             if isinstance(cover_in, str) and cover_in.startswith("data:"):
-                cover_path = save_cover_from_dataurl(cover_in, slug)
+                cover_url = save_cover_from_dataurl(cover_in, slug)
             else:
-                cover_path = str(cover_in)
+                cover_url = str(cover_in)
         except Exception as e:
-            return json_response(self, 400, {"ok": False, "error": f"cover invalid: {e}"})
+            return json_response(self, 400, {"ok": False, "error": str(e)})
 
         item = {
             "slug": slug,
-            "title": title,
-            "episodes": episodes,
-            "genres": genres,
-            "description": description,
-            "cover": cover_path[7:] if cover_path.startswith("assets/") else cover_path,
-            "status": status,
-            "year": year,
-            "studio": studio
+            "title": body["title"],
+            "episodes": int(body["episodes"]),
+            "genres": body["genres"],
+            "description": body["description"],
+            "cover": cover_url,
+            "status": body["status"],
+            "year": int(body["year"]),
+            "studio": body["studio"],
         }
 
         items = load_json(ANIME_JSON, [])
         items = [a for a in items if a.get("slug") != slug]
         items.append(item)
         save_json(ANIME_JSON, items)
+        json_response(self, 200, {"ok": True, "saved": item})
 
-        return json_response(self, 200, {"ok": True, "saved": item})
-
-    # ---------- Admin: upload coveru (multipart) ----------
+    # --- Upload cover ---
     def handle_upload_cover(self):
-        if not (self.headers.get("Content-Type","").startswith("multipart/form-data")):
-            return json_response(self, 400, {"ok": False, "error": "Content-Type must be multipart/form-data"})
-
         fields = parse_multipart_request(self)
-
-        slug  = fields.get("slug")
-        cover = fields.get("cover")  # bytes
-        if isinstance(slug, bytes):
-            slug = slug.decode("utf-8", "ignore")
-        if not slug or not isinstance(cover, (bytes, bytearray)):
+        slug = fields.get("slug")
+        cover = fields.get("cover")
+        if not slug or not cover:
             return json_response(self, 400, {"ok": False, "error": "Missing slug or cover"})
+        try:
+            url = upload_to_supabase(f"covers/{safe_name(slug)}.jpg", cover, "image/jpeg")
+            json_response(self, 200, {"ok": True, "path": url})
+        except Exception as e:
+            json_response(self, 500, {"ok": False, "error": str(e)})
 
-        # pokus odhadnout příponu
-        ext = "jpg"
-        sniff = bytes(cover[:10])
-        if sniff.startswith(b"\x89PNG"):
-            ext = "png"
-        elif sniff[:3] == b"\xff\xd8\xff":
-            ext = "jpg"
-        elif sniff[:4] == b"RIFF":
-            ext = "webp"
-
-        fname = f"{safe_name(slug)}.{ext}"
-        os.makedirs(COVERS_DIR, exist_ok=True)
-        fpath = os.path.join(COVERS_DIR, fname)
-        with open(fpath, "wb") as f:
-            f.write(cover)
-        rel = os.path.join("covers", fname).replace("\\", "/")
-        return json_response(self, 200, {"ok": True, "path": rel})
-
+# === START SERVER ===
 def run():
-    ensure_dirs()
-    port = int(os.getenv("PORT", "8000"))  # Render dodá PORT
+    port = int(os.getenv("PORT", "8000"))
     httpd = HTTPServer(("0.0.0.0", port), Handler)
     print(f"✅ Server běží na http://0.0.0.0:{port}")
-    print(f"📂 Uploads: {UPLOAD_ROOT}")
     httpd.serve_forever()
 
 if __name__ == "__main__":
