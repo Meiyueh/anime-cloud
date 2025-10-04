@@ -399,7 +399,7 @@
           const resp = await fetch(App.api('/admin/add_anime'), {
             method:'POST',
             headers:{'Content-Type':'application/json'},
-            body: JSON.stringify({ slug, title, episodes, genres, description, cover, status, year, studio }))
+            body: JSON.stringify({ slug, title, episodes, genres, description, cover, status, year, studio })
           });
           if (!resp.ok){
             const tt = await resp.text().catch(()=> '');
@@ -424,5 +424,6 @@
   </script>
 </body>
 </html>
+
 
 
