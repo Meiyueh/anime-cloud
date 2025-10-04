@@ -104,7 +104,7 @@
     const debounce = (fn,ms)=>{let t;return (...a)=>{clearTimeout(t);t=setTimeout(()=>fn(...a),ms)}};
 
     (async function(){
-      const anime = await App.fetchAnime('data/anime.json');
+      const anime = await App.fetchAnime(`${window.CLOUD_BASE}/data/anime.json`);
       const uploads = App.getUploads();
 
       // STATISTIKY
@@ -154,7 +154,16 @@
       function cardHTML(a){
         const x = uploadedPerAnime[a.slug] || 0;
         const y = a.episodes;
-        const coverSrc = 'assets/' + (a.cover || '');
+      
+        // použij přímo a.cover; když chybí, zkus fallbacky
+        const coverSrc = (() => {
+          const c = a.cover || '';
+          if (/^https?:\/\//.test(c)) return c;                         // plná URL (GCS) – použij
+          if (c.startsWith('covers/')) return `${window.CLOUD_BASE}/${c}`; // relativní k bucketu
+          if (!c) return 'assets/logo.svg';                             // úplný fallback
+          return c;                                                     // jiná relativní cesta (pokud bys měl)
+        })();
+      
         return `
           <a href="#" class="card anime-card" data-slug="${a.slug}">
             <img class="cover-tall" loading="lazy" src="${coverSrc}" alt="${a.title}" onerror="this.src='assets/logo.svg'">
@@ -246,6 +255,7 @@
   </script>
 </body>
 </html>
+
 
 
 
