@@ -266,7 +266,7 @@ class Handler(SimpleHTTPRequestHandler):
     def handle_upload(self):
         print("== [/upload] start ==")
         try:
-            # cgi.FieldStorage streamuje velké části na disk (SpooledTemporaryFile)
+            import cgi
             form = cgi.FieldStorage(
                 fp=self.rfile,
                 headers=self.headers,
@@ -277,20 +277,32 @@ class Handler(SimpleHTTPRequestHandler):
                 keep_blank_values=True
             )
 
+            # textové parametry
             anime   = (form.getfirst("anime") or "").strip()
-            episode = form.getfirst("episode")
+            episode_raw = form.getfirst("episode")
             quality = (form.getfirst("quality") or "").strip()
-            vfield  = form["video"] if "video" in form else None
-            sfield  = form["subs"]  if "subs"  in form else None
-            vname   = form.getfirst("videoName") or (vfield.filename if vfield else None)
-            sname   = form.getfirst("subsName")  or (sfield.filename if sfield else None)
 
-            print(f"params anime={anime} ep={episode} q={quality} vname={vname} sname={sname}")
+            # soubory (FieldStorage); NEVYHODNOCUJ v if!
+            vfield = form["video"] if ("video" in form and isinstance(form["video"], cgi.FieldStorage)) else None
+            sfield = form["subs"]  if ("subs"  in form and isinstance(form["subs"],  cgi.FieldStorage)) else None
 
-            if not (anime and episode and quality and vfield and vname):
+            # jména souborů
+            vname = (form.getfirst("videoName") or (vfield.filename if (vfield and vfield.filename) else None))
+            sname = (form.getfirst("subsName")  or (sfield.filename if (sfield and sfield.filename) else None))
+
+            print(f"params anime={anime} ep={episode_raw} q={quality} vname={vname} sname={sname}")
+
+            # validace vstupu (pozor na FieldStorage!)
+            if not anime or not episode_raw or not quality or (vfield is None) or not vname:
                 return json_response(self, 400, {"ok": False, "error": "Missing required fields"})
 
-            ep_folder = f"{int(episode):05d}"
+            try:
+                episode = int(str(episode_raw).strip())
+            except Exception:
+                return json_response(self, 400, {"ok": False, "error": "Invalid 'episode' value"})
+
+            # příprava cest a MIME
+            ep_folder = f"{episode:05d}"
             vname = safe_name(vname)
             sname = safe_name(sname or "subs.srt")
 
@@ -304,7 +316,7 @@ class Handler(SimpleHTTPRequestHandler):
             video_path = f"anime/{anime}/{ep_folder}/{quality}/{vname}"
             subs_path  = f"anime/{anime}/{ep_folder}/{quality}/{sname}"
 
-            # VIDEO
+            # VIDEO (streamem)
             print(f"Uploading video → {video_path} (mime={v_mime})")
             try:
                 try: vfield.file.seek(0)
@@ -318,7 +330,7 @@ class Handler(SimpleHTTPRequestHandler):
 
             # SUBS (pokud jsou)
             subs_url = None
-            if sfield:
+            if sfield is not None:
                 print(f"Uploading subs → {subs_path} (mime={s_mime})")
                 try:
                     try: sfield.file.seek(0)
@@ -334,7 +346,7 @@ class Handler(SimpleHTTPRequestHandler):
 
         except Exception as e:
             print("== [/upload] ERROR ==")
-            traceback.print_exc()
+            import traceback; traceback.print_exc()
             return json_response(self, 500, {"ok": False, "error": f"{type(e).__name__}: {e}"})
 
     # --------- /feedback ----------
@@ -442,3 +454,4 @@ def run():
 
 if __name__ == "__main__":
     run()
+
