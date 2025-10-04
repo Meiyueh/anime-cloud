@@ -256,7 +256,7 @@
             const slug=btn.dataset.slug, ep=Number(btn.dataset.ep), q=btn.dataset.q, name=btn.dataset.name;
             if (!confirm(`Smazat ${name}?`)) return;
             try{
-              const r = await fetch('/delete',{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({anime:slug,episode:ep,quality:q,videoName:name})});
+              const r = await fetch(App.api('/delete'),{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({anime:slug,episode:ep,quality:q,videoName:name})});
               if(!r.ok) App.toast('Soubor na disku se nepodařilo smazat','error');
             }catch{ App.toast('Chyba připojení','error'); }
             // Lokálně smaž záznam a přerenderuj bez reloadu
@@ -357,7 +357,7 @@
         const pass = prompt('Zadej heslo pro smazání VŠECH souborů v uploads/ (nevratné):');
         if (!pass) return;
         try{
-          const r = await fetch('/wipe_all',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:pass})});
+          const r = await fetch(App.api('/wipe_all'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:pass})});
           if (r.ok){ App.setUploads([]); App.toast('Smazáno na serveru i lokálně','ok'); location.reload(); }
           else App.toast('Špatné heslo nebo chyba serveru','error');
         }catch{ App.toast('Chyba připojení','error'); }
@@ -396,10 +396,10 @@
 
         // 2) server: zapsat do data/anime.json
         try{
-          const resp = await fetch('/admin/add_anime', {
+          const resp = await fetch(App.api('/admin/add_anime'), {
             method:'POST',
             headers:{'Content-Type':'application/json'},
-            body: JSON.stringify({ slug, title, episodes, genres, description, cover, status, year, studio })
+            body: JSON.stringify({ slug, title, episodes, genres, description, cover, status, year, studio }))
           });
           if (!resp.ok){
             const tt = await resp.text().catch(()=> '');
@@ -424,4 +424,5 @@
   </script>
 </body>
 </html>
+
 
