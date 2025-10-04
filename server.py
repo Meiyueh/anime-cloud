@@ -307,12 +307,13 @@ class Handler(SimpleHTTPRequestHandler):
         rel = os.path.join("covers", fname).replace("\\", "/")
         return json_response(self, 200, {"ok": True, "path": rel})
 
-def run(port=8000):
+def run(port=None):
     ensure_dirs()
+    port = int(port or os.getenv("PORT", 8000))   # 👈 vezme Render $PORT
     httpd = HTTPServer(('', port), Handler)
-    print(f"✅ Server běží na http://localhost:{port}")
-    print(f"📂 Uploads: {UPLOAD_ROOT}")
+    print(f"✅ Server běží na http://0.0.0.0:{port}")
     httpd.serve_forever()
 
 if __name__ == "__main__":
     run()
+
