@@ -113,6 +113,7 @@
 
   <script src="scripts/app.js"></script>
   <script>
+    window.CLOUD_BASE = "https://storage.googleapis.com/anime-cloud";
     App.initNavbar(); App.guardAuthOnPage('login.html');
 
     const a = App.auth(); const u = App.getUser(a.email) || {};
@@ -220,3 +221,4 @@
   </script>
 </body>
 </html>
+
