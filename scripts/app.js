@@ -1,3 +1,4 @@
+// ===================== AnimeCloud - app.js (full) =====================
 // ===== LocalStorage helpers =====
 const readLS = (k, def) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : def; } catch { return def; } };
 const writeLS = (k, v) => localStorage.setItem(k, JSON.stringify(v));
@@ -13,6 +14,22 @@ const KEYS = {
 
 // ===== DOM helpers =====
 const $ = sel => document.querySelector(sel);
+
+// ===== API base & helpers =====
+// Preferuj AC_API z HTML. Fallback: stejný původ (stejný host+port), aby to jelo i bez konfigurace.
+const API_BASE = (typeof window !== 'undefined' && window.AC_API) ? window.AC_API : `${location.protocol}//${location.host}`;
+function api(path) {
+  if (!path) return API_BASE;
+  // když je to už absolutní URL, vrať jak je
+  if (/^https?:\/\//i.test(path)) return path;
+  // ensure leading slash
+  const p = path.startsWith('/') ? path : `/${path}`;
+  return `${API_BASE}${p}`;
+}
+async function apiFetch(path, init={}) {
+  // Pomocná obálka okolo fetch s absolutní URL (hodí se pro admin skripty v HTML)
+  return fetch(api(path), init);
+}
 
 // ===== Toasts =====
 (function ensureToastWrap(){
@@ -153,10 +170,28 @@ function getUploadCountByQuality(slug, ep, q){
 }
 
 // ===== Anime data =====
-async function fetchAnime(path='data/anime.json'){ const r = await fetch(path, {cache:'no-cache'}); return await r.json(); }
-function populateSelectWithPlaceholder(sel, text='— vyber z možností —'){ sel.innerHTML=''; const op=document.createElement('option'); op.value=''; op.disabled=true; op.selected=true; op.textContent=text; sel.appendChild(op); }
-function populateEpisodesSelect(sel, count){ populateSelectWithPlaceholder(sel, '— vyber díl —'); for(let i=1;i<=count;i++){ const o=document.createElement('option'); o.value=String(i); o.textContent=`Díl ${i}`; sel.appendChild(o); } }
-function extOrDefault(name, defExt){ const m=/(?:\.)([a-z0-9]+)$/i.exec(name||''); const e=m?m[1].toLowerCase():''; return e||defExt; }
+async function fetchAnime(path='data/anime.json'){
+  // Sloučíme vestavěný anime.json + případná lokální rozšíření (admin přidává)
+  const r = await fetch(path, {cache:'no-cache'});
+  const base = await r.json();
+  const localExtra = readLS('animecloud_custom_anime', []);
+  // dedupe by slug (local wins)
+  const map = new Map();
+  base.forEach(a=>map.set(a.slug,a));
+  localExtra.forEach(a=>map.set(a.slug,a));
+  return Array.from(map.values());
+}
+function populateSelectWithPlaceholder(sel, text='— vyber z možností —'){
+  sel.innerHTML='';
+  const op=document.createElement('option'); op.value=''; op.disabled=true; op.selected=true; op.textContent=text; sel.appendChild(op);
+}
+function populateEpisodesSelect(sel, count){
+  populateSelectWithPlaceholder(sel, '— vyber díl —');
+  for(let i=1;i<=count;i++){ const o=document.createElement('option'); o.value=String(i); o.textContent=`Díl ${i}`; sel.appendChild(o); }
+}
+function extOrDefault(name, defExt){
+  const m=/(?:\.)([a-z0-9]+)$/i.exec(name||''); const e=m?m[1].toLowerCase():''; return e||defExt;
+}
 
 // ===== Feedback (offline store) =====
 function saveFeedback(item){
@@ -215,6 +250,60 @@ function fmtBytes(bytes){
   return parseFloat((bytes/Math.pow(k,i)).toFixed(2)) + ' ' + sizes[i];
 }
 
+// ===== Upload API (pro upload.html) =====
+async function uploadToServer({ anime, episode, quality, videoFile, subsFile }) {
+  if (!anime || !episode || !quality || !videoFile) {
+    throw new Error('Vyplň anime, díl, kvalitu a vyber video.');
+  }
+  const fd = new FormData();
+  fd.append('anime', anime);
+  fd.append('episode', String(episode));
+  fd.append('quality', quality);
+  fd.append('video', videoFile);
+  fd.append('videoName', videoFile.name || 'video.mp4');
+  if (subsFile) {
+    fd.append('subs', subsFile);
+    fd.append('subsName', subsFile.name || 'subs.srt');
+  }
+
+  const res = await fetch(api('/upload'), { method: 'POST', body: fd });
+  let payload = null; try { payload = await res.json(); } catch {}
+  if (!res.ok || !payload?.ok) {
+    const msg = payload?.error || `HTTP ${res.status}`;
+    throw new Error(`Upload selhal: ${msg}`);
+  }
+  return payload; // { ok:true, video:"...", subs:"..."|null }
+}
+
+// Volitelný univerzální handler (když chceš jen navázat na tlačítko s id="btn-upload")
+async function handleUploadClick() {
+  try {
+    const anime   = document.getElementById('anime')?.value?.trim();
+    const episode = document.getElementById('episode')?.value?.trim();
+    const quality = document.getElementById('quality')?.value?.trim();
+    const video   = document.getElementById('video')?.files?.[0] || null;
+    const subs    = document.getElementById('subs')?.files?.[0] || null;
+
+    const authInfo = auth();
+    const out = await uploadToServer({ anime, episode, quality, videoFile: video, subsFile: subs });
+
+    addUploadRecord({
+      slug: anime,
+      episode: Number(episode),
+      quality,
+      videoUrl: out.video,
+      subsUrl: out.subs || null,
+      user: authInfo?.email || null,
+      ts: Date.now()
+    });
+
+    toast('Nahráno ✔');
+  } catch (e) {
+    console.error(e);
+    toast(e?.message || 'Chyba připojení', 'err');
+  }
+}
+
 // ===== Export App =====
 window.App = {
   // UI
@@ -230,5 +319,10 @@ window.App = {
   // Feedback
   saveFeedback, getFeedback, updateFeedback, addTicketMessage, getTicketById,
   // Utils
-  fmtBytes
+  fmtBytes,
+  // API helpers
+  api, apiFetch, apiBase: API_BASE,
+  // Upload
+  uploadToServer, handleUploadClick
 };
+// ===================== /app.js =====================
