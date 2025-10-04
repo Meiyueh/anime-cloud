@@ -246,7 +246,7 @@
 
       try {
         const xhr = new XMLHttpRequest();
-        xhr.open('POST', '/upload');
+        xhr.open('POST', App.api('/upload'));
         xhr.upload.onprogress = (e)=>{ if (e.lengthComputable){ const p = Math.round(e.loaded/e.total*100); barOverall.style.width=p+'%'; pctOverall.textContent=p+'%'; miniPV.style.width=p+'%'; if (s) miniPS.style.width=p+'%'; } };
         xhr.onload = ()=> {
           if (xhr.status === 200){
@@ -296,3 +296,4 @@
   </script>
 </body>
 </html>
+
