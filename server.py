@@ -1,29 +1,37 @@
 #!/usr/bin/env python3
-import os, json, re, base64, requests, hashlib
+# -*- coding: utf-8 -*-
+
+import os, json, re, base64, requests, hashlib, cgi, traceback
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from email.parser import BytesParser
 from email.policy import default as email_default
 from urllib.parse import quote
 from dotenv import load_dotenv
 
-# ========== ENV ==========
+# =========================
+# ENV / CONFIG
+# =========================
 load_dotenv()
 
-# --- GCS config (použije se, pokud je nastaven GCS_BUCKET) ---
+# Preferovaný storage: Google Cloud Storage (GCS)
 GCS_BUCKET = os.getenv("GCS_BUCKET", "").strip()
 GCS_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
 
-# --- Supabase config (fallback, když není GCS_BUCKET) ---
+# Fallback storage: Supabase
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE", "")
 SUPABASE_BUCKET = os.getenv("SUPABASE_BUCKET", "anime-cloud")
 
+# Aplikace – cesty & konstanty
 ROOT = os.getcwd()
 DATA_DIR = os.path.join(ROOT, "data")
 ANIME_JSON = os.path.join(DATA_DIR, "anime.json")
 FEEDBACK_DIR = os.path.join(ROOT, "feedback")
 WIPE_PASSWORD = "789456123Lol"
 
+# =========================
+# UTIL
+# =========================
 def safe_name(name: str) -> str:
     if isinstance(name, bytes):
         name = name.decode("utf-8", "ignore")
@@ -56,10 +64,25 @@ def ensure_dirs():
     os.makedirs(DATA_DIR, exist_ok=True)
     os.makedirs(FEEDBACK_DIR, exist_ok=True)
 
+# =========================
+# MIME
+# =========================
 EXT_MIME = {
-    ".mp4":"video/mp4", ".m4v":"video/x-m4v", ".webm":"video/webm", ".mkv":"video/x-matroska", ".mov":"video/quicktime",
-    ".srt":"application/x-subrip", ".vtt":"text/vtt",
-    ".jpg":"image/jpeg", ".jpeg":"image/jpeg", ".png":"image/png", ".webp":"image/webp", ".gif":"image/gif",
+    # video
+    ".mp4": "video/mp4",
+    ".m4v": "video/x-m4v",
+    ".webm": "video/webm",
+    ".mkv": "video/x-matroska",
+    ".mov": "video/quicktime",
+    # subtitles
+    ".srt": "application/x-subrip",
+    ".vtt": "text/vtt",
+    # images
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
 }
 def guess_mime(filename: str, sniff: bytes | None = None, default: str = "application/octet-stream") -> str:
     fn = (filename or "").lower()
@@ -70,19 +93,21 @@ def guess_mime(filename: str, sniff: bytes | None = None, default: str = "applic
         if sniff.startswith(b"\x89PNG"): return "image/png"
         if sniff[:3] == b"\xff\xd8\xff": return "image/jpeg"
         if sniff.startswith(b"RIFF") and b"WEBP" in sniff[:16]: return "image/webp"
-        if sniff[:4] == b"\x1a\x45\xdf\xa3": return "video/x-matroska"
+        if sniff[:4] == b"\x1a\x45\xdf\xa3": return "video/x-matroska"  # mkv
         if sniff[:4] == b"ftyp": return "video/mp4"
     return default
 
-# ========== STORAGE LAYER ==========
+# =========================
+# STORAGE LAYER
+# =========================
 # --- GCS (preferovaný) ---
 _gcs_client = None
 def _ensure_gcs():
     global _gcs_client
     if _gcs_client is None:
-        from google.cloud import storage
         if not GCS_BUCKET or not GCS_CREDENTIALS:
             raise RuntimeError("GCS not configured (GCS_BUCKET/GOOGLE_APPLICATION_CREDENTIALS).")
+        from google.cloud import storage  # import až při použití
         _gcs_client = storage.Client()
     return _gcs_client
 
@@ -98,7 +123,21 @@ def upload_to_gcs(path_in_bucket: str, raw: bytes, mime: str, overwrite: bool = 
         raise RuntimeError("exists")
     blob.cache_control = "public, max-age=31536000, immutable"
     blob.upload_from_string(raw, content_type=(mime or "application/octet-stream"))
-    # public read bucket -> URL funguje bez signování
+    return gcs_public_url(path_in_bucket)
+
+def upload_to_gcs_stream(path_in_bucket: str, fileobj, mime: str, overwrite: bool = True) -> str:
+    client = _ensure_gcs()
+    bucket = client.bucket(GCS_BUCKET)
+    blob = bucket.blob(path_in_bucket)
+    if not overwrite and blob.exists(client):
+        raise RuntimeError("exists")
+    blob.cache_control = "public, max-age=31536000, immutable"
+    # FieldStorage dává SpooledTemporaryFile – streamujeme bez držení v RAM
+    try:
+        fileobj.seek(0)
+    except Exception:
+        pass
+    blob.upload_from_file(fileobj, content_type=(mime or "application/octet-stream"))
     return gcs_public_url(path_in_bucket)
 
 # --- Supabase (fallback) ---
@@ -121,13 +160,22 @@ def upload_to_supabase(path_in_bucket: str, raw: bytes, mime: str, overwrite: bo
         raise RuntimeError(f"Upload failed {r.status_code}: {r.text}")
     return supabase_public_url(path_in_bucket)
 
-# --- unified API ---
+# --- sjednocené API ---
 def upload_bytes(path_in_bucket: str, raw: bytes, mime: str, overwrite: bool = True) -> str:
     if GCS_BUCKET:
         return upload_to_gcs(path_in_bucket, raw, mime, overwrite)
     return upload_to_supabase(path_in_bucket, raw, mime, overwrite)
 
-# ========== DATA URL COVER ==========
+def upload_fileobj(path_in_bucket: str, fileobj, mime: str, overwrite: bool = True) -> str:
+    if GCS_BUCKET:
+        return upload_to_gcs_stream(path_in_bucket, fileobj, mime, overwrite)
+    # Supabase stream nemá; přečteme do bytes (většinou používáme GCS)
+    data = fileobj.read()
+    return upload_to_supabase(path_in_bucket, data, mime, overwrite)
+
+# =========================
+# DATA URL → cover do cloudu
+# =========================
 DATAURL_RE = re.compile(r"^data:(?P<mime>[\w/+.-]+);base64,(?P<b64>.*)$", re.DOTALL)
 def save_cover_from_dataurl(data_url: str, slug: str) -> str:
     m = DATAURL_RE.match(data_url.strip())
@@ -135,11 +183,19 @@ def save_cover_from_dataurl(data_url: str, slug: str) -> str:
         raise ValueError("Invalid data URL")
     mime = m.group("mime").lower()
     raw = base64.b64decode(m.group("b64"), validate=True)
-    ext = {"image/jpeg":"jpg","image/jpg":"jpg","image/png":"png","image/webp":"webp","image/gif":"gif"}.get(mime,"jpg")
+    ext = {
+        "image/jpeg": "jpg",
+        "image/jpg": "jpg",
+        "image/png": "png",
+        "image/webp": "webp",
+        "image/gif": "gif",
+    }.get(mime, "jpg")
     path_in_bucket = f"covers/{safe_name(slug)}.{ext}"
     return upload_bytes(path_in_bucket, raw, mime, overwrite=True)
 
-# ========== MULTIPART ==========
+# =========================
+# Jednoduchý multipart parser (pro malé věci: cover upload)
+# =========================
 def parse_multipart_request(handler):
     length = int(handler.headers.get("Content-Length", "0") or "0")
     body = handler.rfile.read(length)
@@ -150,19 +206,24 @@ def parse_multipart_request(handler):
     if msg.is_multipart():
         for part in msg.iter_parts():
             name = part.get_param("name", header="content-disposition")
-            if not name: continue
+            if not name:
+                continue
             filename = part.get_filename()
             payload = part.get_payload(decode=True)
             if filename is None:
                 charset = part.get_content_charset() or "utf-8"
-                try: value = payload.decode(charset, errors="ignore")
-                except Exception: value = payload.decode("utf-8", errors="ignore")
+                try:
+                    value = payload.decode(charset, errors="ignore")
+                except Exception:
+                    value = payload.decode("utf-8", errors="ignore")
                 fields[name] = value
             else:
                 fields[name] = payload
     return fields
 
-# ========== HTTP HANDLER ==========
+# =========================
+# HTTP HANDLER
+# =========================
 class Handler(SimpleHTTPRequestHandler):
     def end_headers(self):
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -171,61 +232,112 @@ class Handler(SimpleHTTPRequestHandler):
         super().end_headers()
 
     def do_OPTIONS(self):
-        self.send_response(200); self.end_headers()
+        self.send_response(200)
+        self.end_headers()
+
+    def do_DELETE(self):
+        # Admin UI volá /delete, ale v cloudu teď nemažeme (nemáme referenci na přesné objekty).
+        # Vrátíme OK, aby UI lokálně smazalo záznam – skutečné mazání cloudu můžeš případně doplnit.
+        if self.path == "/delete":
+            print("== [/delete] noop – cloud delete není implementován ==")
+            return json_response(self, 200, {"ok": True, "note": "cloud delete not implemented"})
+        return json_response(self, 404, {"ok": False, "error": "Not found"})
 
     def do_POST(self):
         try:
-            match self.path:
-                case "/upload": self.handle_upload()
-                case "/feedback": self.handle_feedback()
-                case "/wipe_all": self.handle_wipe_all()
-                case "/admin/add_anime": self.handle_add_anime()
-                case "/admin/upload_cover": self.handle_upload_cover()
-                case _: json_response(self, 404, {"ok": False, "error": "Not found"})
+            if self.path == "/upload":
+                return self.handle_upload()
+            elif self.path == "/feedback":
+                return self.handle_feedback()
+            elif self.path == "/wipe_all":
+                return self.handle_wipe_all()
+            elif self.path == "/admin/add_anime":
+                return self.handle_add_anime()
+            elif self.path == "/admin/upload_cover":
+                return self.handle_upload_cover()
+            else:
+                return json_response(self, 404, {"ok": False, "error": "Not found"})
         except Exception as e:
-            json_response(self, 500, {"ok": False, "error": f"Unhandled error: {e}"})
+            print("== [POST Unhandled ERROR] ==")
+            traceback.print_exc()
+            return json_response(self, 500, {"ok": False, "error": f"Unhandled error: {e}"})
 
+    # --------- /upload (STREAM SAFE) ----------
     def handle_upload(self):
-        fields = parse_multipart_request(self)
-        anime   = fields.get("anime")
-        episode = fields.get("episode")
-        quality = fields.get("quality")
-        video   = fields.get("video")
-        vname   = fields.get("videoName")
-        subs    = fields.get("subs")
-        sname   = fields.get("subsName")
-
-        if not all([anime, episode, quality, video, vname]):
-            return json_response(self, 400, {"ok": False, "error": "Missing required fields"})
-
-        ep_folder = f"{int(episode):05d}"
-        vname = safe_name(vname)
-        sname = safe_name(sname or "subs.srt")
-
-        v_mime = guess_mime(vname, sniff=video[:8] if isinstance(video,(bytes,bytearray)) else None, default="video/mp4")
-        s_mime = guess_mime(sname, sniff=subs[:8] if isinstance(subs,(bytes,bytearray)) else None, default="application/x-subrip")
-
-        def avoid_collision(path_in_bucket: str) -> str:
-            base, dot, ext = path_in_bucket.partition(".")
-            return f"{base}-{hashlib.sha1(os.urandom(8)).hexdigest()[:6]}{('.' + ext) if dot else ''}"
-
-        video_path = f"anime/{anime}/{ep_folder}/{quality}/{vname}"
-        subs_path  = f"anime/{anime}/{ep_folder}/{quality}/{sname}"
-
+        print("== [/upload] start ==")
         try:
-            video_url = upload_bytes(video_path, video, v_mime, overwrite=True)
-        except RuntimeError:
-            video_url = upload_bytes(avoid_collision(video_path), video, v_mime, overwrite=False)
+            # cgi.FieldStorage streamuje velké části na disk (SpooledTemporaryFile)
+            form = cgi.FieldStorage(
+                fp=self.rfile,
+                headers=self.headers,
+                environ={
+                    "REQUEST_METHOD": "POST",
+                    "CONTENT_TYPE": self.headers.get("Content-Type", ""),
+                },
+                keep_blank_values=True
+            )
 
-        subs_url = None
-        if subs:
+            anime   = (form.getfirst("anime") or "").strip()
+            episode = form.getfirst("episode")
+            quality = (form.getfirst("quality") or "").strip()
+            vfield  = form["video"] if "video" in form else None
+            sfield  = form["subs"]  if "subs"  in form else None
+            vname   = form.getfirst("videoName") or (vfield.filename if vfield else None)
+            sname   = form.getfirst("subsName")  or (sfield.filename if sfield else None)
+
+            print(f"params anime={anime} ep={episode} q={quality} vname={vname} sname={sname}")
+
+            if not (anime and episode and quality and vfield and vname):
+                return json_response(self, 400, {"ok": False, "error": "Missing required fields"})
+
+            ep_folder = f"{int(episode):05d}"
+            vname = safe_name(vname)
+            sname = safe_name(sname or "subs.srt")
+
+            v_mime = guess_mime(vname, default="video/mp4")
+            s_mime = guess_mime(sname, default="application/x-subrip")
+
+            def avoid_collision(path_in_bucket: str) -> str:
+                base, dot, ext = path_in_bucket.partition(".")
+                return f"{base}-{hashlib.sha1(os.urandom(8)).hexdigest()[:6]}{('.' + ext) if dot else ''}"
+
+            video_path = f"anime/{anime}/{ep_folder}/{quality}/{vname}"
+            subs_path  = f"anime/{anime}/{ep_folder}/{quality}/{sname}"
+
+            # VIDEO
+            print(f"Uploading video → {video_path} (mime={v_mime})")
             try:
-                subs_url = upload_bytes(subs_path, subs, s_mime, overwrite=True)
-            except RuntimeError:
-                subs_url = upload_bytes(avoid_collision(subs_path), subs, s_mime, overwrite=False)
+                try: vfield.file.seek(0)
+                except Exception: pass
+                video_url = upload_fileobj(video_path, vfield.file, v_mime, overwrite=True)
+            except RuntimeError as e:
+                print(f"[video overwrite failed] {e}; trying avoid_collision")
+                try: vfield.file.seek(0)
+                except Exception: pass
+                video_url = upload_fileobj(avoid_collision(video_path), vfield.file, v_mime, overwrite=False)
 
-        return json_response(self, 200, {"ok": True, "video": video_url, "subs": subs_url})
+            # SUBS (pokud jsou)
+            subs_url = None
+            if sfield:
+                print(f"Uploading subs → {subs_path} (mime={s_mime})")
+                try:
+                    try: sfield.file.seek(0)
+                    except Exception: pass
+                    subs_url = upload_fileobj(subs_path, sfield.file, s_mime, overwrite=True)
+                except RuntimeError:
+                    try: sfield.file.seek(0)
+                    except Exception: pass
+                    subs_url = upload_fileobj(avoid_collision(subs_path), sfield.file, s_mime, overwrite=False)
 
+            print("== [/upload] OK ==")
+            return json_response(self, 200, {"ok": True, "video": video_url, "subs": subs_url})
+
+        except Exception as e:
+            print("== [/upload] ERROR ==")
+            traceback.print_exc()
+            return json_response(self, 500, {"ok": False, "error": f"{type(e).__name__}: {e}"})
+
+    # --------- /feedback ----------
     def handle_feedback(self):
         try:
             length = int(self.headers.get("Content-Length", "0"))
@@ -238,6 +350,7 @@ class Handler(SimpleHTTPRequestHandler):
             json.dump(data, f, ensure_ascii=False, indent=2)
         return json_response(self, 200, {"ok": True})
 
+    # --------- /wipe_all ----------
     def handle_wipe_all(self):
         try:
             length = int(self.headers.get("Content-Length", "0"))
@@ -246,20 +359,24 @@ class Handler(SimpleHTTPRequestHandler):
             return json_response(self, 400, {"ok": False, "error": "Invalid JSON"})
         if payload.get("password") != WIPE_PASSWORD:
             return json_response(self, 403, {"ok": False, "error": "Forbidden"})
+        # Cloud wipe zde úmyslně neděláme (bezpečnost). Lze doplnit později.
         return json_response(self, 200, {"ok": True, "status": "cloud wipe disabled"})
 
+    # --------- /admin/add_anime ----------
     def handle_add_anime(self):
         try:
             length = int(self.headers.get("Content-Length", "0"))
             body = json.loads(self.rfile.read(length) or b"{}")
         except Exception:
             return json_response(self, 400, {"ok": False, "error": "Invalid JSON"})
+
         required = ["slug","title","episodes","genres","description","cover","status","year","studio"]
         if not all(k in body for k in required):
             return json_response(self, 400, {"ok": False, "error": "Missing required fields"})
 
         slug = safe_name(str(body["slug"]).lower())
         cover_in = body.get("cover")
+
         try:
             if isinstance(cover_in, str) and cover_in.startswith("data:"):
                 cover_url = save_cover_from_dataurl(cover_in, slug)
@@ -289,17 +406,33 @@ class Handler(SimpleHTTPRequestHandler):
         save_json(ANIME_JSON, items)
         return json_response(self, 200, {"ok": True, "saved": item})
 
+    # --------- /admin/upload_cover (malý multipart) ----------
     def handle_upload_cover(self):
         fields = parse_multipart_request(self)
-        slug = fields.get("slug"); cover = fields.get("cover")
+        slug = fields.get("slug")
+        cover = fields.get("cover")
         if not slug or not cover:
             return json_response(self, 400, {"ok": False, "error": "Missing slug or cover"})
-        sniff = bytes(cover[:12]) if isinstance(cover,(bytes,bytearray)) else None
-        mime = guess_mime("cover.bin", sniff=sniff, default="image/jpeg")
-        ext = {"image/png":"png","image/webp":"webp","image/gif":"gif","image/jpeg":"jpg"}.get(mime,"jpg")
-        url = upload_bytes(f"covers/{safe_name(slug)}.{ext}", cover, mime, overwrite=True)
-        return json_response(self, 200, {"ok": True, "path": url})
 
+        sniff = bytes(cover[:12]) if isinstance(cover, (bytes, bytearray)) else None
+        ext_mime = guess_mime("cover.bin", sniff=sniff, default="image/jpeg")
+        ext = {
+            "image/png": "png",
+            "image/webp": "webp",
+            "image/gif": "gif",
+            "image/jpeg": "jpg",
+        }.get(ext_mime, "jpg")
+
+        fname = f"{safe_name(slug)}.{ext}"
+        try:
+            url = upload_bytes(f"covers/{fname}", cover, ext_mime, overwrite=True)
+            return json_response(self, 200, {"ok": True, "path": url})
+        except Exception as e:
+            return json_response(self, 500, {"ok": False, "error": str(e)})
+
+# =========================
+# START SERVER
+# =========================
 def run():
     ensure_dirs()
     port = int(os.getenv("PORT", "8000"))
