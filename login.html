@@ -25,7 +25,6 @@
   <main class="container">
     <h1 style="text-align:center;">Přihlášení / Registrace</h1>
 
-    <!-- vycentrovaný login panel -->
     <div class="card" id="panel-login" style="max-width:460px;margin:0 auto;">
       <form id="loginForm" class="compact">
         <div class="row compact"><label for="loginEmail">E-mail</label><input type="email" id="loginEmail" class="w-compact" required /></div>
@@ -35,7 +34,6 @@
       <p class="muted" style="text-align:center;margin-top:.5rem;">Nemáte účet? <a href="#" id="link-show-register">Zaregistrujte se</a></p>
     </div>
 
-    <!-- vycentrovaný registrační panel -->
     <div class="card hidden" id="panel-register" style="max-width:460px;margin:12px auto 0;">
       <form id="registerForm" class="compact hidden">
         <div class="row compact"><label for="regEmail">E-mail</label><input type="email" id="regEmail" class="w-compact" required /></div>
@@ -62,7 +60,6 @@
       e.preventDefault();
       panelLogin.classList.add('hidden');
       panelRegister.classList.remove('hidden');
-      // zobraz i samotný formulář uvnitř panelu
       document.getElementById('registerForm').classList.remove('hidden');
       msg.textContent='';
     });
@@ -70,30 +67,36 @@
       e.preventDefault();
       panelRegister.classList.add('hidden');
       panelLogin.classList.remove('hidden');
-      // registrace form zase skryj (ať je stav konzistentní)
       document.getElementById('registerForm').classList.add('hidden');
       msg.textContent='';
     });
 
-    document.getElementById('loginForm').addEventListener('submit', e => {
+    document.getElementById('loginForm').addEventListener('submit', async e => {
       e.preventDefault();
-      const email = document.getElementById('loginEmail').value.trim();
-      const pass = document.getElementById('loginPass').value.trim();
-      if (App.login(email, pass)) { App.toast('Přihlášeno', 'ok'); location.href='index.html'; }
-      else App.showMsg(msg, '⚠️ Špatný e-mail nebo heslo.', 'error');
+      const email = document.getElementById('loginEmail').value.trim().toLowerCase();
+      const pass  = document.getElementById('loginPass').value.trim();
+      try{
+        await App.cloudLogin(email, pass);
+        App.toast('Přihlášeno', 'ok');
+        location.href='index.html';
+      }catch(err){
+        App.showMsg(msg, '⚠️ Špatný e-mail nebo heslo.', 'error');
+      }
     });
 
-    document.getElementById('registerForm').addEventListener('submit', e => {
+    document.getElementById('registerForm').addEventListener('submit', async e => {
       e.preventDefault();
-      const email = document.getElementById('regEmail').value.trim();
-      const pass = document.getElementById('regPass').value.trim();
-      if (App.register(email, pass)) {
+      const email = document.getElementById('regEmail').value.trim().toLowerCase();
+      const pass  = document.getElementById('regPass').value.trim();
+      try{
+        await App.cloudRegister(email, pass);
         App.showMsg(msg, '✅ Registrace úspěšná. Nyní se přihlaste.', 'ok');
         panelRegister.classList.add('hidden'); panelLogin.classList.remove('hidden');
         document.getElementById('loginEmail').value = email;
         document.getElementById('loginPass').focus();
+      }catch(err){
+        App.showMsg(msg, '⚠️ Účet již existuje nebo chyba serveru.', 'error');
       }
-      else App.showMsg(msg, '⚠️ Účet s tímto e-mailem již existuje.', 'error');
     });
   </script>
 </body>
