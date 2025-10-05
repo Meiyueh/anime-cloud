@@ -16,20 +16,14 @@ const KEYS = {
 const $ = sel => document.querySelector(sel);
 
 // ===== API base & helpers =====
-// Preferuj AC_API z HTML. Fallback: stejný původ (stejný host+port), aby to jelo i bez konfigurace.
 const API_BASE = (typeof window !== 'undefined' && window.AC_API) ? window.AC_API : `${location.protocol}//${location.host}`;
 function api(path) {
   if (!path) return API_BASE;
-  // když je to už absolutní URL, vrať jak je
   if (/^https?:\/\//i.test(path)) return path;
-  // ensure leading slash
   const p = path.startsWith('/') ? path : `/${path}`;
   return `${API_BASE}${p}`;
 }
-async function apiFetch(path, init={}) {
-  // Pomocná obálka okolo fetch s absolutní URL (hodí se pro admin skripty v HTML)
-  return fetch(api(path), init);
-}
+async function apiFetch(path, init={}) { return fetch(api(path), init); }
 
 // ===== Toasts =====
 (function ensureToastWrap(){
@@ -46,7 +40,7 @@ function toast(msg, type='ok', timeout=2600){
   setTimeout(()=>{ t.style.opacity = 0; t.style.transform='translateY(8px)'; setTimeout(()=>t.remove(), 200); }, timeout);
 }
 
-// ===== Users / Auth =====
+// ===== Users / Auth (LS fallback beze změn) =====
 function readUsers(){ return readLS(KEYS.USERS, {}); }
 function writeUsers(u){ writeLS(KEYS.USERS, u); }
 function ensureSeedAdmin(){
@@ -89,7 +83,45 @@ function updateUser(email, patch){
   writeUsers(users);
 }
 
-// ===== Profile helpers =====
+// ===== Cloud Users / Auth (nové) =====
+async function cloudRegister(email, password){
+  const r = await apiFetch('/users/register', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email, password}) });
+  if (!r.ok){ const t = await r.json().catch(()=>null); throw new Error(t?.error || `HTTP ${r.status}`); }
+  return true;
+}
+async function cloudLogin(email, password){
+  const r = await apiFetch('/users/login', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email, password}) });
+  const t = await r.json().catch(()=>null);
+  if (!r.ok || !t?.ok) throw new Error(t?.error || `HTTP ${r.status}`);
+  const user = t.user;
+  writeLS(KEYS.AUTH, { email: user.email, role: user.role, at: Date.now() });
+  // volitelně mirror do LS users kvůli statistikám v indexu
+  const u = readUsers(); u[user.email] = { email:user.email, role:user.role, createdAt:user.createdAt, profile:user.profile }; writeUsers(u);
+  return user;
+}
+async function cloudGetProfile(email){
+  const r = await apiFetch('/users/profile/get', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email}) });
+  const t = await r.json().catch(()=>null);
+  if (!r.ok || !t?.ok) throw new Error(t?.error || `HTTP ${r.status}`);
+  return t.user;
+}
+async function cloudUpdateProfile(email, profilePatch){
+  const r = await apiFetch('/users/profile/update', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email, profilePatch}) });
+  const t = await r.json().catch(()=>null);
+  if (!r.ok || !t?.ok) throw new Error(t?.error || `HTTP ${r.status}`);
+  // mirror do LS users
+  const u = readUsers(); if (!u[email]) u[email] = { email, role: auth().role||'user', createdAt: Date.now(), profile:{} };
+  u[email].profile = t.user.profile; writeUsers(u);
+  return t.user;
+}
+async function cloudUploadAvatar(email, dataUrl){
+  const r = await apiFetch('/users/avatar', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email, dataUrl}) });
+  const t = await r.json().catch(()=>null);
+  if (!r.ok || !t?.ok) throw new Error(t?.error || `HTTP ${r.status}`);
+  return t.avatar;
+}
+
+// ===== Profile helpers (LS verze zůstává, používáme je jako mirror) =====
 function getProfile(email){
   const u = getUser(email); if (!u) return null;
   if (!u.profile) { u.profile = { nickname: email.split('@')[0], avatar:null, primaryTitle:'USER', secondaryTitle:null, frame:null }; updateUser(email,{profile:u.profile}); }
@@ -268,7 +300,7 @@ async function uploadToServer({ anime, episode, quality, videoFile, subsFile }) 
     const msg = payload?.error || `HTTP ${res.status}`;
     throw new Error(`Upload selhal: ${msg}`);
   }
-  return payload; // { ok:true, video:"...", subs:"..."|null }
+  return payload;
 }
 
 // Volitelný univerzální handler (když chceš jen navázat na tlačítko s id="btn-upload")
@@ -304,8 +336,9 @@ async function handleUploadClick() {
 window.App = {
   // UI
   initNavbar, guardAuthOnPage, showMsg, toast, setTheme,
-  // Auth
+  // Auth (LS + Cloud)
   register, login, logout, auth, isAdmin, getUser, updateUser,
+  cloudRegister, cloudLogin, cloudGetProfile, cloudUpdateProfile, cloudUploadAvatar,
   // Profile
   getProfile, setNickname, setAvatar, setSecondaryTitle, computeMilestoneFrame, userUploadCount, unlockedTitles,
   // Anime
@@ -322,6 +355,3 @@ window.App = {
   uploadToServer, handleUploadClick
 };
 // ===================== /app.js =====================
-
-
-
