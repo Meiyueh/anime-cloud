@@ -6,14 +6,22 @@
   <title>AnimeCloud – Přihlášení / Registrace</title>
   <link rel="stylesheet" href="main.css" />
   <style>
-    /* Fallback styling pro případ, že main.css není */
-    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:#0e0e12;color:#fff;margin:0}
-    .wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
-    .panel{width:100%;max-width:480px;background:#181820;border:1px solid #2a2a36;border-radius:16px;box-shadow:0 10px 40px rgba(0,0,0,.25);padding:28px}
+    /* Fallback pro případ, že main.css není k dispozici */
+    :root { --bg:#0e0e12; --card:#181820; --line:#2a2a36; --ac:#7c5cff; --txt:#fff; --muted:#a7a9c9; }
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:var(--bg);color:var(--txt);margin:0}
+    /* topbar */
+    .topbar{position:sticky;top:0;z-index:10;background:#111117;border-bottom:1px solid var(--line)}
+    .topbar .inner{max-width:1080px;margin:0 auto;display:flex;align-items:center;justify-content:space-between;padding:10px 16px}
+    .brand{display:flex;align-items:center;gap:10px;text-decoration:none;color:#eaeaff}
+    .brand svg{width:28px;height:28px}
+    nav a{color:#cfd2ff;text-decoration:none;margin-left:16px}
+    nav a:hover{color:#fff}
+    .wrap{min-height:calc(100vh - 60px);display:flex;align-items:center;justify-content:center;padding:24px}
+    .panel{width:100%;max-width:480px;background:var(--card);border:1px solid var(--line);border-radius:16px;box-shadow:0 10px 40px rgba(0,0,0,.25);padding:28px}
     h1{margin:0 0 18px;text-align:center;font-size:24px}
     .tabs{display:flex;gap:6px;justify-content:center;margin-bottom:18px}
     .tabs button{flex:1;max-width:200px;background:#242437;border:1px solid #33344a;color:#cfd2ff;padding:10px 14px;border-radius:10px;cursor:pointer}
-    .tabs button.active{background:#7c5cff;color:#fff;border-color:#7c5cff}
+    .tabs button.active{background:var(--ac);color:#fff;border-color:var(--ac)}
     form{display:none;text-align:center}
     form.active{display:block}
     label{display:block;margin:8px 0 6px;font-weight:600;opacity:.9;text-align:center}
@@ -23,13 +31,30 @@
       padding:11px 12px;border-radius:10px;outline:none
     }
     .btn{width:100%;max-width:360px;margin:10px auto 0;display:block;
-      background:#7c5cff;border:0;color:#fff;padding:12px 14px;border-radius:12px;font-weight:700;cursor:pointer}
-    .muted{color:#a7a9c9;font-size:12px;margin-top:10px}
+      background:var(--ac);border:0;color:#fff;padding:12px 14px;border-radius:12px;font-weight:700;cursor:pointer}
+    .muted{color:var(--muted);font-size:12px;margin-top:10px;text-align:center}
     .msg{margin:10px auto 0;max-width:360px;text-align:center;font-size:14px}
     .msg.ok{color:#8ef0a5}.msg.err{color:#ff9a9a}
   </style>
 </head>
 <body>
+  <!-- HORNÍ MENU -->
+  <header class="topbar">
+    <div class="inner">
+      <a class="brand" href="/index.html" aria-label="AnimeCloud domů">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M12 2l3.5 6.8 7.5 1.1-5.4 5.3 1.3 7.5L12 19l-6.9 3.7 1.3-7.5L1 9.9l7.5-1.1L12 2z" stroke="#7c5cff" />
+        </svg>
+        <strong>AnimeCloud</strong>
+      </a>
+      <nav>
+        <a href="/index.html">Domů</a>
+        <a href="/feedback.html">Info</a>
+        <a href="/login.html"><strong>Přihlášení</strong></a>
+      </nav>
+    </div>
+  </header>
+
   <div class="wrap">
     <div class="panel">
       <h1>AnimeCloud</h1>
@@ -75,7 +100,6 @@
     tabLogin.onclick = () => { tabLogin.classList.add('active'); tabReg.classList.remove('active'); fLogin.classList.add('active'); fReg.classList.remove('active'); };
     tabReg.onclick   = () => { tabReg.classList.add('active'); tabLogin.classList.remove('active'); fReg.classList.add('active'); fLogin.classList.remove('active'); };
 
-    // helper pro requesty
     async function jsonFetch(url, data) {
       const res = await fetch(url, {
         method: 'POST',
