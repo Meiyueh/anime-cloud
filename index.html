@@ -2,7 +2,7 @@
 <html lang="cs">
 <head>
   <meta charset="utf-8" />
-  <title>AnimeCloud — ÚvodA</title>
+  <title>AnimeCloud — Úvod</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="stylesheet" href="styles/main.css" />
   <style>
@@ -61,7 +61,7 @@
       <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(180px,1fr)); gap: 12px;">
         <div class="card"><strong>Počet anime</strong><div id="stat-anime" class="muted">–</div></div>
         <div class="card"><strong>Registrovaní uživatelé</strong><div id="stat-users" class="muted">–</div></div>
-        <div class="card"><strong>Celkem nahrávek</strong><div id="stat-uploads" class="muted">–</div></div>
+        <div class="card"><strong>Celkem uploadů</strong><div id="stat-uploads" class="muted">–</div></div>
         <div class="card"><strong>Nejaktivnější anime</strong><div id="stat-top-anime" class="muted">–</div></div>
       </div>
     </div>
@@ -83,7 +83,7 @@
         <button id="btnTeaserMore">Zobrazit další</button>
       </div>
 
-      <!-- stránkování dole (zobrazí se po kliknutí na 'Zobrazit další') -->
+      <!-- stránkování dole -->
       <div id="pager" class="pager hidden">
         <button id="btnPrev" aria-label="Předchozí">‹</button>
         <span id="pageNum" class="page-num">1</span>
@@ -104,28 +104,43 @@
     const debounce = (fn,ms)=>{let t;return (...a)=>{clearTimeout(t);t=setTimeout(()=>fn(...a),ms)}};
 
     (async function(){
+      // 1) katalog z GCS
       const anime = await App.fetchAnime(`${window.CLOUD_BASE}/data/anime.json`);
-      const uploads = App.getUploads();
-
-      // STATISTIKY
-      const users = JSON.parse(localStorage.getItem('animecloud_users') || '{}');
       document.getElementById('stat-anime').textContent = String(anime.length);
-      document.getElementById('stat-users').textContent = String(Object.keys(users).length);
-      document.getElementById('stat-uploads').textContent = String(uploads.length);
 
-      // unikátní epizody per anime (pro řazení i statistiky)
-      const uniqKey = {};
-      uploads.forEach(u => { uniqKey[`${u.slug}#${u.episode}`] = 1; });
+      // 2) globální statistiky z našeho serveru (/stats)
+      try {
+        const r = await fetch(App.api('/stats'));
+        const s = await r.json();
+        if (s?.ok) {
+          document.getElementById('stat-users').textContent   = String(s.users);
+          document.getElementById('stat-uploads').textContent = String(s.uploads);
+          const top = s.top_anime;
+          document.getElementById('stat-top-anime').textContent = top ? `${top.slug} — ${top.episodes} dílů` : '—';
+        } else {
+          // fallback na lokál
+          const users = JSON.parse(localStorage.getItem('animecloud_users') || '{}');
+          document.getElementById('stat-users').textContent   = String(Object.keys(users).length);
+          document.getElementById('stat-uploads').textContent = String(App.getUploads().length);
+          document.getElementById('stat-top-anime').textContent = '—';
+        }
+      } catch {
+        const users = JSON.parse(localStorage.getItem('animecloud_users') || '{}');
+        document.getElementById('stat-users').textContent   = String(Object.keys(users).length);
+        document.getElementById('stat-uploads').textContent = String(App.getUploads().length);
+        document.getElementById('stat-top-anime').textContent = '—';
+      }
+
+      // --- zbytek: grid seřazený lehce podle lokálních uploadů (pro UX),
+      // globální top se bere výše ze /stats
+      const uploads = App.getUploads();
+      const uniqKey = {}; uploads.forEach(u => { uniqKey[`${u.slug}#${u.episode}`] = 1; });
       const uploadedPerAnime = {};
       Object.keys(uniqKey).forEach(k => {
         const slug = k.split('#')[0];
         uploadedPerAnime[slug] = (uploadedPerAnime[slug] || 0) + 1;
       });
 
-      const top = Object.entries(uploadedPerAnime).sort((a,b)=>b[1]-a[1])[0];
-      document.getElementById('stat-top-anime').textContent = top ? `${top[0]} — ${top[1]} dílů` : '—';
-
-      // seřadíme anime podle nahraných dílů (desc), fallback podle názvu
       const sorted = anime.slice().sort((a,b)=>{
         const ca = uploadedPerAnime[a.slug] || 0;
         const cb = uploadedPerAnime[b.slug] || 0;
@@ -150,20 +165,18 @@
       let page = 1;
       let filtered = sorted.slice(); // pro search
 
-      // RENDERERY
       function cardHTML(a){
         const x = uploadedPerAnime[a.slug] || 0;
         const y = a.episodes;
-      
-        // použij přímo a.cover; když chybí, zkus fallbacky
+
         const coverSrc = (() => {
           const c = a.cover || '';
-          if (/^https?:\/\//.test(c)) return c;                         // plná URL (GCS) – použij
-          if (c.startsWith('covers/')) return `${window.CLOUD_BASE}/${c}`; // relativní k bucketu
-          if (!c) return 'assets/logo.svg';                             // úplný fallback
-          return c;                                                     // jiná relativní cesta (pokud bys měl)
+          if (/^https?:\/\//.test(c)) return c;
+          if (c.startsWith('covers/')) return `${window.CLOUD_BASE}/${c}`;
+          if (!c) return 'assets/logo.svg';
+          return c;
         })();
-      
+
         return `
           <a href="#" class="card anime-card" data-slug="${a.slug}">
             <img class="cover-tall" loading="lazy" src="${coverSrc}" alt="${a.title}" onerror="this.src='assets/logo.svg'">
@@ -178,10 +191,8 @@
         grid.innerHTML = first4.map(cardHTML).join('');
         teaserMoreRow.classList.remove('hidden');
         pager.classList.add('hidden');
-        // skryj search (zobrazí se až když se přejde do paged)
         searchWrap.style.display = 'none';
         attachCardClicks();
-        // pokud máme ≤4 položky, schovej tlačítko
         if (sorted.length <= 4) { teaserMoreRow.classList.add('hidden'); }
       }
 
@@ -206,45 +217,33 @@
             e.preventDefault();
             if (!isLogged) { App.toast('Pro nahrání se přihlas.', 'error'); return; }
             const slug = el.getAttribute('data-slug');
-            // ulož předvolbu a jdi na upload
             localStorage.setItem('preselect_anime', slug);
             location.href = 'upload.html';
           });
         });
       }
 
-      // start: teaser
       renderTeaser();
 
-      // klik na "Zobrazit další" → přepnout do stránkování
       btnTeaserMore.addEventListener('click', ()=>{
         mode = 'paged';
-        page = 1; // 1. stránka = 20 kusů (včetně těch prvních 4)
-        // zobraz vyhledávání
+        page = 1;
         searchWrap.style.display = 'block';
         renderPaged();
       });
 
-      // pager
       btnPrev.addEventListener('click', ()=>{ if (page>1){ page--; renderPaged(); }});
       btnNext.addEventListener('click', ()=>{ if (page<totalPages()){ page++; renderPaged(); }});
 
-      // vyhledávání (fulltext přes title/genres/studio/year)
       const onSearch = debounce(()=>{
         const q = strip(searchInput.value);
         filtered = sorted.filter(a=>{
           if (!q) return true;
-          const hay = [
-            a.title,
-            (a.genres||[]).join(' '),
-            a.studio,
-            String(a.year)
-          ].map(strip).join(' ');
+          const hay = [a.title, (a.genres||[]).join(' '), a.studio, String(a.year)].map(strip).join(' ');
           return hay.includes(q);
         });
         page = 1;
         if (mode === 'teaser'){
-          // někdo vyhledává v teaser módu → přepni na paged
           mode = 'paged';
           searchWrap.style.display='block';
         }
@@ -255,7 +254,3 @@
   </script>
 </body>
 </html>
-
-
-
-
