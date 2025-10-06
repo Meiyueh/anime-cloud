@@ -1,42 +1,58 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-import os, json, re, base64, hashlib, traceback, io, smtplib, ssl
+
+import os, io, re, json, base64, hashlib, traceback, smtplib, ssl, time
 from http.server import HTTPServer, SimpleHTTPRequestHandler
+from email.message import EmailMessage
 from email.parser import BytesParser
 from email.policy import default as email_default
-from email.mime.text import MIMEText
-from urllib.parse import quote, urlparse, parse_qs
+from urllib.parse import quote, urlencode, urlparse, parse_qs
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# === Konfigurace GCS ===
+# =========================
+# Konfigurace z .env
+# =========================
+# GCS
 GCS_BUCKET = os.getenv("GCS_BUCKET", "").strip()
 GCS_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
 
-# Cloud cesta pro anime.json (v bucketu)
-ANIME_JSON_CLOUD = os.getenv("ANIME_JSON_CLOUD", "data/anime.json")
+# Cesty v bucketu
+ANIME_JSON_CLOUD = os.getenv("ANIME_JSON_CLOUD", "data/anime.json").strip()
+USERS_JSON_CLOUD = os.getenv("USERS_JSON_CLOUD", "private/users/users.json").strip()
 
-# Prefixy pro "soukromá" data
-USERS_PREFIX = os.getenv("USERS_PREFIX", "private/users")
-
-# Aplikace – veřejná URL, použije se v odkazech v e-mailu (např. https://animecloud.example.com)
-APP_BASE_URL = os.getenv("APP_BASE_URL", "http://localhost:8000").rstrip("/")
-
-# SMTP (pro ověřovací e-maily)
+# SMTP
 SMTP_HOST = os.getenv("SMTP_HOST", "").strip()
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587") or "587")
 SMTP_USER = os.getenv("SMTP_USER", "").strip()
 SMTP_PASS = os.getenv("SMTP_PASS", "").strip()
-SMTP_FROM = os.getenv("SMTP_FROM", SMTP_USER or "no-reply@localhost").strip()
-SMTP_TLS  = os.getenv("SMTP_TLS", "true").lower() not in ("0", "false", "no")
+SMTP_FROM = os.getenv("SMTP_FROM", SMTP_USER or "").strip()
+SMTP_STARTTLS = os.getenv("SMTP_STARTTLS", "true").lower() == "true"
+SMTP_DEBUG = int(os.getenv("SMTP_DEBUG", "0") or "0")
+
+# DEV usnadnění
+DEV_ECHO_VERIFICATION_LINK = os.getenv("DEV_ECHO_VERIFICATION_LINK", "false").lower() == "true"
+DEV_SAVE_LAST_EMAIL = os.getenv("DEV_SAVE_LAST_EMAIL", "false").lower() == "true"
+
+# Admin bootstrap (zapnout jen na první start)
+ADMIN_BOOT_ENABLE = os.getenv("ADMIN_BOOT_ENABLE", "false").lower() == "true"
+ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "").strip().lower()
+ADMIN_BOOT_PASSWORD = os.getenv("ADMIN_BOOT_PASSWORD", "").strip()
 
 # Ostatní
 ROOT = os.getcwd()
 FEEDBACK_DIR = os.path.join(ROOT, "feedback")
+OUTBOX_DIR = os.path.join(ROOT, "outbox")
 WIPE_PASSWORD = os.getenv("WIPE_PASSWORD", "789456123Lol")
 
-# ===== Helpers =====
+# =========================
+# Helpery
+# =========================
+def ensure_dirs():
+    os.makedirs(FEEDBACK_DIR, exist_ok=True)
+    os.makedirs(OUTBOX_DIR, exist_ok=True)
+
 def safe_name(name: str) -> str:
     if isinstance(name, bytes):
         name = name.decode("utf-8", "ignore")
@@ -45,14 +61,27 @@ def safe_name(name: str) -> str:
     name = name.replace("/", "").replace("\\", "")
     return name.strip() or "file"
 
-def json_response(h, status: int, obj):
+def json_response(h, status: int, obj: dict):
     h.send_response(status)
     h.send_header("Content-Type", "application/json; charset=utf-8")
     h.end_headers()
     h.wfile.write(json.dumps(obj, ensure_ascii=False).encode("utf-8"))
 
-def ensure_dirs():
-    os.makedirs(FEEDBACK_DIR, exist_ok=True)
+def html_response(h, status: int, html: str):
+    h.send_response(status)
+    h.send_header("Content-Type", "text/html; charset=utf-8")
+    h.end_headers()
+    h.wfile.write(html.encode("utf-8"))
+
+def site_base(h) -> str:
+    # respektuj reverzní proxy
+    xf_proto = h.headers.get("X-Forwarded-Proto")
+    xf_host  = h.headers.get("X-Forwarded-Host")
+    if xf_proto and xf_host:
+        return f"{xf_proto}://{xf_host}"
+    host = h.headers.get("Host", "localhost")
+    scheme = "https" if h.headers.get("X-Forwarded-Proto","").lower()=="https" else "http"
+    return f"{scheme}://{host}"
 
 # MIME map
 EXT_MIME = {
@@ -60,8 +89,6 @@ EXT_MIME = {
     ".srt":"application/x-subrip", ".vtt":"text/vtt",
     ".jpg":"image/jpeg", ".jpeg":"image/jpeg", ".png":"image/png", ".webp":"image/webp", ".gif":"image/gif",
 }
-VIDEO_EXTS = {".mp4", ".m4v", ".webm", ".mkv", ".mov"}
-
 def guess_mime(filename: str, sniff: bytes|None=None, default: str="application/octet-stream") -> str:
     fn = (filename or "").lower()
     for ext, mime in EXT_MIME.items():
@@ -75,92 +102,7 @@ def guess_mime(filename: str, sniff: bytes|None=None, default: str="application/
         if sniff[:4] == b"ftyp": return "video/mp4"
     return default
 
-# ===== Storage: GCS only =====
-_gcs_client = None
-def _ensure_gcs():
-    global _gcs_client
-    if _gcs_client is None:
-        if not GCS_BUCKET or not GCS_CREDENTIALS:
-            raise RuntimeError("GCS not configured (GCS_BUCKET/GOOGLE_APPLICATION_CREDENTIALS)")
-        from google.cloud import storage
-        _gcs_client = storage.Client()
-    return _gcs_client
-
-def gcs_public_url(path_in_bucket: str) -> str:
-    parts = [quote(p) for p in path_in_bucket.split("/")]
-    return f"https://storage.googleapis.com/{GCS_BUCKET}/{'/'.join(parts)}"
-
-def upload_to_gcs(path_in_bucket: str, raw: bytes, mime: str, overwrite: bool=True) -> str:
-    client = _ensure_gcs()
-    bucket = client.bucket(GCS_BUCKET)
-    blob = bucket.blob(path_in_bucket)
-    if not overwrite and blob.exists(client):
-        raise RuntimeError("exists")
-    # veřejné objekty (covers, videa, subs) můžou být cachované dlouho
-    blob.cache_control = "public, max-age=31536000, immutable"
-    blob.upload_from_string(raw, content_type=(mime or "application/octet-stream"))
-    return gcs_public_url(path_in_bucket)
-
-def upload_private_json(path_in_bucket: str, obj: dict):
-    # soukromé JSONy – žádný public URL, necháme default ACL z účtu (přístup jen přes service account)
-    client = _ensure_gcs()
-    bucket = client.bucket(GCS_BUCKET)
-    blob = bucket.blob(path_in_bucket)
-    raw = json.dumps(obj, ensure_ascii=False, indent=2).encode("utf-8")
-    # krátká cache
-    blob.cache_control = "no-store"
-    blob.upload_from_string(raw, content_type="application/json; charset=utf-8")
-
-def download_from_gcs(path_in_bucket: str) -> bytes|None:
-    client = _ensure_gcs()
-    bucket = client.bucket(GCS_BUCKET)
-    blob = bucket.blob(path_in_bucket)
-    if not blob.exists(client):
-        return None
-    return blob.download_as_bytes()
-
-def download_private_json(path_in_bucket: str) -> dict|None:
-    b = download_from_gcs(path_in_bucket)
-    if not b:
-        return None
-    try:
-        return json.loads(b.decode("utf-8"))
-    except Exception:
-        return None
-
-# ===== anime.json: čtení/zápis v cloudu =====
-def read_anime_list() -> list:
-    try:
-        b = download_from_gcs(ANIME_JSON_CLOUD)
-        if not b:
-            return []
-        return json.loads(b.decode("utf-8"))
-    except Exception:
-        return []
-
-def write_anime_list(items: list) -> str:
-    raw = json.dumps(items, ensure_ascii=False, indent=2).encode("utf-8")
-    client = _ensure_gcs()
-    bucket = client.bucket(GCS_BUCKET)
-    blob = bucket.blob(ANIME_JSON_CLOUD)
-    # pro JSON nedáváme dlouhou cache
-    blob.cache_control = "no-cache"
-    blob.upload_from_string(raw, content_type="application/json; charset=utf-8")
-    return gcs_public_url(ANIME_JSON_CLOUD)
-
-# ===== data URL -> cover upload =====
-DATAURL_RE = re.compile(r"^data:(?P<mime>[\w/+.-]+);base64,(?P<b64>.*)$", re.DOTALL)
-def save_cover_from_dataurl(data_url: str, slug: str) -> str:
-    m = DATAURL_RE.match(data_url.strip())
-    if not m:
-        raise ValueError("Invalid data URL")
-    mime = m.group("mime").lower()
-    raw = base64.b64decode(m.group("b64"), validate=True)
-    ext = {"image/jpeg":"jpg","image/jpg":"jpg","image/png":"png","image/webp":"webp","image/gif":"gif"}.get(mime,"jpg")
-    path_in_bucket = f"covers/{safe_name(slug)}.{ext}"
-    return upload_to_gcs(path_in_bucket, raw, mime, overwrite=True)
-
-# ===== multipart parser =====
+# multipart parser
 def parse_multipart_request(handler):
     length = int(handler.headers.get("Content-Length", "0") or "0")
     body = handler.rfile.read(length)
@@ -183,56 +125,170 @@ def parse_multipart_request(handler):
                 fields[name] = payload
     return fields
 
-# ===== Auth helpers (GCS private users) =====
-def norm_email(email: str) -> str:
-    return (email or "").strip().lower()
+# =========================
+# GCS klient & operace (ONLY GCS)
+# =========================
+_gcs_client = None
 
-def user_blob_key(email: str) -> str:
-    e = norm_email(email)
-    sha = hashlib.sha256(e.encode("utf-8")).hexdigest()
-    return f"{USERS_PREFIX}/{sha}.json"
+def _ensure_gcs():
+    global _gcs_client
+    if _gcs_client is None:
+        if not GCS_BUCKET:
+            raise RuntimeError("GCS_BUCKET není nastaven.")
+        from google.cloud import storage
+        _gcs_client = storage.Client()
+    return _gcs_client
 
-def hash_password(password: str, salt: bytes|None=None, iters: int=200_000) -> dict:
-    salt = salt or os.urandom(16)
-    dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iters)
-    return {
-        "algo": "pbkdf2_sha256",
-        "i": iters,
-        "salt": base64.b64encode(salt).decode("ascii"),
-        "hash": base64.b64encode(dk).decode("ascii"),
-    }
+def gcs_public_url(path_in_bucket: str) -> str:
+    parts = [quote(p) for p in path_in_bucket.split("/")]
+    return f"https://storage.googleapis.com/{GCS_BUCKET}/{'/'.join(parts)}"
 
-def verify_password(password: str, rec: dict) -> bool:
+def upload_bytes(path_in_bucket: str, raw: bytes, mime: str, overwrite: bool=True, immutable: bool=True) -> str:
+    client = _ensure_gcs()
+    bucket = client.bucket(GCS_BUCKET)
+    blob = bucket.blob(path_in_bucket)
+    if not overwrite and blob.exists(client):
+        raise RuntimeError("exists")
+    if immutable:
+        blob.cache_control = "public, max-age=31536000, immutable"
+    blob.upload_from_string(raw, content_type=(mime or "application/octet-stream"))
+    return gcs_public_url(path_in_bucket)
+
+def download_bytes(path_in_bucket: str) -> bytes|None:
+    client = _ensure_gcs()
+    bucket = client.bucket(GCS_BUCKET)
+    blob = bucket.blob(path_in_bucket)
+    if not blob.exists(client):
+        return None
+    return blob.download_as_bytes()
+
+# =========================
+# anime.json (cloud)
+# =========================
+def read_anime_list() -> list:
     try:
-        salt = base64.b64decode(rec["salt"])
-        iters = int(rec.get("i", 200_000))
-        dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iters)
-        return base64.b64encode(dk).decode("ascii") == rec["hash"]
+        b = download_bytes(ANIME_JSON_CLOUD)
+        if not b: return []
+        return json.loads(b.decode("utf-8"))
+    except Exception:
+        return []
+
+def write_anime_list(items: list) -> str:
+    raw = json.dumps(items, ensure_ascii=False, indent=2).encode("utf-8")
+    # nechceme immutable public cache pro JSON katalog (ať se nelepí stará verze)
+    client = _ensure_gcs()
+    bucket = client.bucket(GCS_BUCKET)
+    blob = bucket.blob(ANIME_JSON_CLOUD)
+    blob.upload_from_string(raw, content_type="application/json; charset=utf-8")
+    return gcs_public_url(ANIME_JSON_CLOUD)
+
+# =========================
+# Users (single file: private/users/users.json)
+# =========================
+def read_users_map() -> dict:
+    b = download_bytes(USERS_JSON_CLOUD)
+    if not b: return {}
+    try: return json.loads(b.decode("utf-8"))
+    except Exception: return {}
+
+def write_users_map(obj: dict) -> None:
+    raw = json.dumps(obj, ensure_ascii=False, indent=2).encode("utf-8")
+    client = _ensure_gcs()
+    bucket = client.bucket(GCS_BUCKET)
+    blob = bucket.blob(USERS_JSON_CLOUD)
+    # soukromý objekt – žádný public cache-control
+    blob.upload_from_string(raw, content_type="application/json; charset=utf-8")
+
+def read_user(email: str) -> dict|None:
+    email = (email or "").strip().lower()
+    if not email: return None
+    return read_users_map().get(email)
+
+def write_user(u: dict) -> None:
+    email = (u.get("email") or "").strip().lower()
+    if not email: raise ValueError("user.email is required")
+    users = read_users_map()
+    users[email] = u
+    write_users_map(users)
+
+def users_count() -> int:
+    return len(read_users_map())
+
+# =========================
+# Cover z data:URL
+# =========================
+DATAURL_RE = re.compile(r"^data:(?P<mime>[\w/+.-]+);base64,(?P<b64>.*)$", re.DOTALL)
+def save_cover_from_dataurl(data_url: str, slug: str) -> str:
+    m = DATAURL_RE.match(data_url.strip())
+    if not m:
+        raise ValueError("Invalid data URL")
+    mime = m.group("mime").lower()
+    raw = base64.b64decode(m.group("b64"), validate=True)
+    ext = {"image/jpeg":"jpg","image/jpg":"jpg","image/png":"png","image/webp":"webp","image/gif":"gif"}.get(mime,"jpg")
+    path_in_bucket = f"covers/{safe_name(slug)}.{ext}"
+    return upload_bytes(path_in_bucket, raw, mime, overwrite=True, immutable=True)
+
+# =========================
+# SMTP odesílání
+# =========================
+def send_email(to_addr: str, subject: str, html: str, text: str|None=None):
+    if not (SMTP_HOST and SMTP_USER and SMTP_PASS and SMTP_FROM):
+        return False, "SMTP not configured"
+    try:
+        msg = EmailMessage()
+        msg["From"] = SMTP_FROM
+        msg["To"] = to_addr
+        msg["Subject"] = subject
+        if text:
+            msg.set_content(text)
+            msg.add_alternative(html, subtype="html")
+        else:
+            msg.set_content("HTML email")
+            msg.add_alternative(html, subtype="html")
+
+        if DEV_SAVE_LAST_EMAIL:
+            with open(os.path.join(OUTBOX_DIR, "last_email.eml"), "wb") as f:
+                f.write(bytes(msg))
+
+        if SMTP_STARTTLS:
+            server = smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30)
+            if SMTP_DEBUG: server.set_debuglevel(1)
+            server.ehlo()
+            server.starttls(context=ssl.create_default_context())
+            server.login(SMTP_USER, SMTP_PASS)
+            server.send_message(msg)
+            server.quit()
+        else:
+            server = smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=30)
+            if SMTP_DEBUG: server.set_debuglevel(1)
+            server.login(SMTP_USER, SMTP_PASS)
+            server.send_message(msg)
+            server.quit()
+        return True, None
+    except Exception as e:
+        return False, str(e)
+
+# =========================
+# Auth utility
+# =========================
+def scrypt_hash(password: str, salt: bytes|None=None):
+    if salt is None:
+        salt = os.urandom(16)
+    h = hashlib.scrypt(password.encode("utf-8"), salt=salt, n=16384, r=8, p=1)
+    return base64.b64encode(h).decode("ascii"), base64.b64encode(salt).decode("ascii")
+
+def check_password(password: str, enc_hash: str, enc_salt: str) -> bool:
+    try:
+        want = base64.b64decode(enc_hash)
+        salt = base64.b64decode(enc_salt)
+        got = hashlib.scrypt(password.encode("utf-8"), salt=salt, n=16384, r=8, p=1)
+        return got == want
     except Exception:
         return False
 
-def send_email_html(to_addr: str, subject: str, html: str):
-    if not SMTP_HOST:
-        print("⚠️ SMTP není nakonfigurován – e-mail se neposílá.")
-        return
-    msg = MIMEText(html, "html", "utf-8")
-    msg["Subject"] = subject
-    msg["From"] = SMTP_FROM
-    msg["To"] = to_addr
-    if SMTP_TLS:
-        ctx = ssl.create_default_context()
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as s:
-            s.starttls(context=ctx)
-            if SMTP_USER:
-                s.login(SMTP_USER, SMTP_PASS)
-            s.send_message(msg)
-    else:
-        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT) as s:
-            if SMTP_USER:
-                s.login(SMTP_USER, SMTP_PASS)
-            s.send_message(msg)
-
-# ===== HTTP handler =====
+# =========================
+# HTTP handler
+# =========================
 class Handler(SimpleHTTPRequestHandler):
     def end_headers(self):
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -243,43 +299,32 @@ class Handler(SimpleHTTPRequestHandler):
     def do_OPTIONS(self):
         self.send_response(200); self.end_headers()
 
+    # ---------- GET ----------
     def do_GET(self):
         try:
-            parsed = urlparse(self.path)
-            if parsed.path == "/stats":
-                return self.handle_stats()
-            elif parsed.path == "/auth/verify":
-                return self.handle_auth_verify(parsed)
-            else:
-                return super().do_GET()
+            if self.path.startswith("/auth/verify"):
+                return self.handle_auth_verify_get()
+            # fallback: statické soubory
+            return super().do_GET()
         except Exception as e:
             traceback.print_exc()
-            return json_response(self, 500, {"ok": False, "error": f"Unhandled GET: {e}"})
+            html_response(self, 500, f"<h1>500</h1><pre>{e}</pre>")
 
-    def do_DELETE(self):
-        try:
-            if self.path == "/delete":
-                return self.handle_delete()
-            else:
-                return json_response(self, 404, {"ok": False, "error": "Not found"})
-        except Exception as e:
-            traceback.print_exc()
-            return json_response(self, 500, {"ok": False, "error": f"Unhandled DELETE: {e}"})
-
+    # ---------- POST ----------
     def do_POST(self):
         try:
             match self.path:
-                # Uploady & feedback
+                # Upload & admin
                 case "/upload": self.handle_upload()
                 case "/feedback": self.handle_feedback()
                 case "/wipe_all": self.handle_wipe_all()
-                # Admin obsah
                 case "/admin/add_anime": self.handle_add_anime()
                 case "/admin/upload_cover": self.handle_upload_cover()
-                # Auth (cloud users)
+                # Auth
                 case "/auth/register": self.handle_auth_register()
                 case "/auth/login": self.handle_auth_login()
-                case "/auth/update_profile": self.handle_auth_update_profile()
+                case "/auth/verify": self.handle_auth_verify_post()
+                # Default
                 case _: json_response(self, 404, {"ok": False, "error": "Not found"})
         except Exception as e:
             traceback.print_exc()
@@ -314,20 +359,20 @@ class Handler(SimpleHTTPRequestHandler):
         subs_path  = f"anime/{anime}/{ep_folder}/{quality}/{sname}"
 
         try:
-            video_url = upload_to_gcs(video_path, video, v_mime, overwrite=True)
+            video_url = upload_bytes(video_path, video, v_mime, overwrite=True, immutable=True)
         except RuntimeError:
-            video_url = upload_to_gcs(avoid_collision(video_path), video, v_mime, overwrite=False)
+            video_url = upload_bytes(avoid_collision(video_path), video, v_mime, overwrite=False, immutable=True)
 
         subs_url = None
         if subs:
             try:
-                subs_url = upload_to_gcs(subs_path, subs, s_mime, overwrite=True)
+                subs_url = upload_bytes(subs_path, subs, s_mime, overwrite=True, immutable=True)
             except RuntimeError:
-                subs_url = upload_to_gcs(avoid_collision(subs_path), subs, s_mime, overwrite=False)
+                subs_url = upload_bytes(avoid_collision(subs_path), subs, s_mime, overwrite=False, immutable=True)
 
         return json_response(self, 200, {"ok": True, "video": video_url, "subs": subs_url})
 
-    # --- Feedback (lokální dump pro ladění) ---
+    # --- Feedback ---
     def handle_feedback(self):
         length = int(self.headers.get("Content-Length", "0"))
         try:
@@ -340,7 +385,7 @@ class Handler(SimpleHTTPRequestHandler):
             json.dump(data, f, ensure_ascii=False, indent=2)
         return json_response(self, 200, {"ok": True})
 
-    # --- Wipe placeholder ---
+    # --- Wipe (placeholder) ---
     def handle_wipe_all(self):
         length = int(self.headers.get("Content-Length", "0"))
         try:
@@ -351,7 +396,7 @@ class Handler(SimpleHTTPRequestHandler):
             return json_response(self, 403, {"ok": False, "error": "Forbidden"})
         return json_response(self, 200, {"ok": True, "status": "cloud wipe disabled"})
 
-    # --- Add/Update anime (cloud-only) ---
+    # --- Add/Update anime (zapíše do GCS data/anime.json) ---
     def handle_add_anime(self):
         length = int(self.headers.get("Content-Length", "0"))
         try:
@@ -393,6 +438,7 @@ class Handler(SimpleHTTPRequestHandler):
         items = [a for a in items if a.get("slug") != slug]
         items.append(item)
         url_json = write_anime_list(items)
+
         return json_response(self, 200, {"ok": True, "saved": item, "anime_json_url": url_json})
 
     # --- Upload cover (multipart) ---
@@ -404,185 +450,161 @@ class Handler(SimpleHTTPRequestHandler):
         sniff = bytes(cover[:12]) if isinstance(cover,(bytes,bytearray)) else None
         mime = guess_mime("cover.bin", sniff=sniff, default="image/jpeg")
         ext = {"image/png":"png","image/webp":"webp","image/gif":"gif","image/jpeg":"jpg"}.get(mime,"jpg")
-        url = upload_to_gcs(f"covers/{safe_name(slug)}.{ext}", cover, mime, overwrite=True)
+        url = upload_bytes(f"covers/{safe_name(slug)}.{ext}", cover, mime, overwrite=True, immutable=True)
         return json_response(self, 200, {"ok": True, "path": url})
 
-    # --- DELETE video/subs z GCS (pro admin) ---
-    def handle_delete(self):
-        length = int(self.headers.get("Content-Length", "0") or "0")
-        body = self.rfile.read(length) if length else b"{}"
-        try:
-            payload = json.loads(body or b"{}")
-        except Exception:
-            return json_response(self, 400, {"ok": False, "error": "Invalid JSON"})
-        slug = payload.get("anime"); ep = payload.get("episode"); q = payload.get("quality"); name = payload.get("videoName")
-        if not all([slug, ep, q, name]):
-            return json_response(self, 400, {"ok": False, "error": "Missing fields"})
-        ep_folder = f"{int(ep):05d}"
-        path = f"anime/{safe_name(slug)}/{ep_folder}/{safe_name(q)}/{safe_name(name)}"
-        try:
-            client = _ensure_gcs()
-            bucket = client.bucket(GCS_BUCKET)
-            blob = bucket.blob(path)
-            if blob.exists(client):
-                blob.delete()
-            return json_response(self, 200, {"ok": True})
-        except Exception as e:
-            traceback.print_exc()
-            return json_response(self, 500, {"ok": False, "error": f"delete: {e}"})
-
-    # --- STATS (GCS scan) ---
-    def handle_stats(self):
-        try:
-            client = _ensure_gcs()
-            # users
-            users_cnt = sum(1 for _ in client.list_blobs(GCS_BUCKET, prefix=f"{USERS_PREFIX}/"))
-            # uploads & top anime (unikátní epizody/slug)
-            uploads_cnt = 0
-            per_slug_ep = {}
-            for b in client.list_blobs(GCS_BUCKET, prefix="anime/"):
-                name = b.name.lower()
-                if any(name.endswith(ext) for ext in VIDEO_EXTS):
-                    uploads_cnt += 1
-                    parts = b.name.split("/")
-                    if len(parts) >= 5:
-                        slug, ep = parts[1], parts[2]
-                        per_slug_ep.setdefault(slug, set()).add(ep)
-            top_slug, top_eps = None, 0
-            for slug, eps in per_slug_ep.items():
-                if len(eps) > top_eps:
-                    top_slug, top_eps = slug, len(eps)
-            return json_response(self, 200, {
-                "ok": True,
-                "users": users_cnt,
-                "uploads": uploads_cnt,
-                "top_anime": {"slug": top_slug, "episodes": top_eps} if top_slug else None
-            })
-        except Exception as e:
-            traceback.print_exc()
-            return json_response(self, 500, {"ok": False, "error": f"stats: {e}"})
-
-    # --- AUTH API ---
+    # =========================
+    # Auth endpoints
+    # =========================
     def handle_auth_register(self):
-        length = int(self.headers.get("Content-Length", "0") or "0")
+        length = int(self.headers.get("Content-Length", "0"))
         try:
             data = json.loads(self.rfile.read(length) or b"{}")
         except Exception:
             return json_response(self, 400, {"ok": False, "error": "Invalid JSON"})
-        email = norm_email(data.get("email") or "")
-        password = (data.get("password") or "").strip()
+
+        email = (data.get("email") or "").strip().lower()
+        password = data.get("password") or ""
         if not email or not password:
             return json_response(self, 400, {"ok": False, "error": "Missing email/password"})
-        key = user_blob_key(email)
-        client = _ensure_gcs(); bucket = client.bucket(GCS_BUCKET); blob = bucket.blob(key)
-        if blob.exists(client):
-            return json_response(self, 409, {"ok": False, "error": "User exists"})
-        pw = hash_password(password)
-        token = base64.urlsafe_b64encode(os.urandom(24)).decode("ascii").rstrip("=")
+        if read_user(email):
+            return json_response(self, 409, {"ok": False, "error": "exists"})
+
+        # hash a token
+        h, salt = scrypt_hash(password)
+        import secrets
+        token = secrets.token_urlsafe(32)
+
         user_obj = {
             "email": email,
-            "password": pw,
+            "role": "user",
+            "createdAt": int(time.time()*1000),
             "verified": False,
             "verify_token": token,
-            "createdAt": int(__import__("time").time()*1000),
-            "role": "user",
+            "pwd": h,
+            "salt": salt,
             "profile": {"nickname": email.split("@")[0], "avatar": None, "secondaryTitle": None}
         }
-        upload_private_json(key, user_obj)
+        write_user(user_obj)
 
-        # e-mail s potvrzením
-        link = f"{APP_BASE_URL}/auth/verify?email={quote(email)}&token={quote(token)}"
+        # ověřovací odkaz (GET endpoint)
+        vurl = f"{site_base(self)}/auth/verify?{urlencode({'email': email, 'token': token})}"
+
         html = f"""
-        <div style="font-family:Segoe UI,Tahoma,sans-serif">
-          <h2>Vítej v AnimeCloud</h2>
-          <p>Potvrď prosím svůj účet kliknutím na tlačítko:</p>
-          <p><a href="{link}" style="display:inline-block;background:#7c5cff;color:#fff;padding:10px 14px;border-radius:8px;text-decoration:none" target="_blank" rel="noreferrer">Aktivovat účet</a></p>
-          <p>Nebo otevři odkaz ručně: <br><code>{link}</code></p>
+        <div style="font-family:sans-serif;line-height:1.5">
+          <h2>Vítej v AnimeCloud 👋</h2>
+          <p>Potvrď prosím svůj e-mail kliknutím na tlačítko:</p>
+          <p><a href="{vurl}" style="background:#7c5cff;color:#fff;padding:10px 14px;border-radius:8px;text-decoration:none">Ověřit účet</a></p>
+          <p>Pokud tlačítko nefunguje, použij tento odkaz: <br><a href="{vurl}">{vurl}</a></p>
         </div>
         """
-        try:
-            send_email_html(email, "AnimeCloud – potvrzení registrace", html)
-        except Exception as e:
-            print("E-mail se nepodařilo odeslat:", e)
+        ok, err = send_email(email, "Ověření účtu — AnimeCloud", html, text=f"Ověř svůj účet: {vurl}")
+        resp = {"ok": True}
+        if DEV_ECHO_VERIFICATION_LINK:
+            resp["verification_url"] = vurl
+        if not ok:
+            resp["warning"] = f"Email neodeslán: {err}"
+        return json_response(self, 200, resp)
 
+    def handle_auth_verify_post(self):
+        # JSON POST {email, token}
+        length = int(self.headers.get("Content-Length", "0"))
+        try:
+            data = json.loads(self.rfile.read(length) or b"{}")
+        except Exception:
+            return json_response(self, 400, {"ok": False, "error": "Invalid JSON"})
+        email = (data.get("email") or "").strip().lower()
+        token = data.get("token") or ""
+        return self._verify_core(email, token, as_html=False)
+
+    def handle_auth_verify_get(self):
+        # GET /auth/verify?email=&token=
+        q = parse_qs(urlparse(self.path).query)
+        email = (q.get("email", [""])[0] or "").strip().lower()
+        token = q.get("token", [""])[0] or ""
+        ok, msg = self._verify_core(email, token, as_html=True)
+        return ok
+
+    def _verify_core(self, email: str, token: str, as_html: bool):
+        u = read_user(email)
+        if not u or not token or token != u.get("verify_token"):
+            if as_html:
+                return html_response(self, 400, "<h1>Ověření selhalo</h1><p>Neplatný odkaz nebo e-mail.</p>")
+            return json_response(self, 400, {"ok": False, "error": "invalid"})
+        u["verified"] = True
+        u.pop("verify_token", None)
+        write_user(u)
+        if as_html:
+            return html_response(self, 200, "<h1>Účet ověřen ✅</h1><p>Nyní se můžete přihlásit.</p>")
         return json_response(self, 200, {"ok": True})
 
-    def handle_auth_verify(self, parsed):
-        qs = parse_qs(parsed.query or "")
-        email = norm_email((qs.get("email") or [""])[0])
-        token = (qs.get("token") or [""])[0]
-        if not email or not token:
-            # odpověz mini HTML
-            html = "<h3>Chybí parametry.</h3>"
-            self.send_response(400); self.send_header("Content-Type","text/html; charset=utf-8"); self.end_headers()
-            return self.wfile.write(html.encode("utf-8"))
-        key = user_blob_key(email)
-        user = download_private_json(key)
-        if not user or user.get("verify_token") != token:
-            html = "<h3>Neplatný odkaz, nebo už byl použit.</h3>"
-            self.send_response(400); self.send_header("Content-Type","text/html; charset=utf-8"); self.end_headers()
-            return self.wfile.write(html.encode("utf-8"))
-        user["verified"] = True
-        user["verify_token"] = None
-        upload_private_json(key, user)
-        html = f"""
-        <div style="font-family:Segoe UI,Tahoma,sans-serif">
-          <h2>Účet aktivován 🎉</h2>
-          <p>Nyní se můžeš přihlásit.</p>
-          <p><a href="{APP_BASE_URL}/login.html">Přejít na přihlášení</a></p>
-        </div>
-        """
-        self.send_response(200); self.send_header("Content-Type","text/html; charset=utf-8"); self.end_headers()
-        return self.wfile.write(html.encode("utf-8"))
-
     def handle_auth_login(self):
-        length = int(self.headers.get("Content-Length", "0") or "0")
+        length = int(self.headers.get("Content-Length", "0"))
         try:
             data = json.loads(self.rfile.read(length) or b"{}")
         except Exception:
             return json_response(self, 400, {"ok": False, "error": "Invalid JSON"})
-        email = norm_email(data.get("email") or "")
-        password = (data.get("password") or "").strip()
-        if not email or not password:
-            return json_response(self, 400, {"ok": False, "error": "Missing email/password"})
-        key = user_blob_key(email)
-        user = download_private_json(key)
-        if not user or not verify_password(password, user.get("password") or {}):
+
+        email = (data.get("email") or "").strip().lower()
+        password = data.get("password") or ""
+        u = read_user(email)
+        if not u:
             return json_response(self, 401, {"ok": False, "error": "Invalid credentials"})
-        if not user.get("verified"):
+        if not u.get("verified"):
             return json_response(self, 403, {"ok": False, "error": "Account not verified"})
-        # jednoduchý "session" token (JWT by šel později)
-        sess = base64.urlsafe_b64encode(os.urandom(24)).decode("ascii").rstrip("=")
-        user["session"] = {"token": sess, "at": int(__import__("time").time()*1000)}
-        upload_private_json(key, user)
-        public_profile = {
-            "email": user["email"],
-            "role": user.get("role","user"),
-            "profile": user.get("profile") or {},
-        }
-        return json_response(self, 200, {"ok": True, "token": sess, "user": public_profile})
+        if not check_password(password, u.get("pwd",""), u.get("salt","")):
+            return json_response(self, 401, {"ok": False, "error": "Invalid credentials"})
+        import secrets
+        token = secrets.token_urlsafe(24)
+        return json_response(self, 200, {
+            "ok": True,
+            "token": token,
+            "user": {"email": email, "role": u.get("role","user"), "profile": u.get("profile",{})}
+        })
 
-    def handle_auth_update_profile(self):
-        length = int(self.headers.get("Content-Length", "0") or "0")
-        try:
-            data = json.loads(self.rfile.read(length) or b"{}")
-        except Exception:
-            return json_response(self, 400, {"ok": False, "error": "Invalid JSON"})
-        email = norm_email(data.get("email") or "")
-        token = (data.get("token") or "").strip()
-        prof  = data.get("profile") or {}
-        if not email or not token:
-            return json_response(self, 400, {"ok": False, "error": "Missing email/token"})
-        key = user_blob_key(email)
-        user = download_private_json(key)
-        if not user or (user.get("session") or {}).get("token") != token:
-            return json_response(self, 401, {"ok": False, "error": "Unauthorized"})
-        user["profile"] = { **(user.get("profile") or {}), **prof }
-        upload_private_json(key, user)
-        return json_response(self, 200, {"ok": True, "profile": user["profile"]})
+# =========================
+# Bootstrap admin
+# =========================
+def ensure_bootstrap_admin():
+    if not ADMIN_BOOT_ENABLE or not ADMIN_EMAIL or not ADMIN_BOOT_PASSWORD:
+        return
+    if read_user(ADMIN_EMAIL):
+        print("ℹ️  Bootstrap admin: už existuje, nic nedělám.")
+        return
+    h, salt = scrypt_hash(ADMIN_BOOT_PASSWORD)
+    u = {
+        "email": ADMIN_EMAIL,
+        "role": "admin",
+        "createdAt": int(time.time()*1000),
+        "verified": True,
+        "pwd": h,
+        "salt": salt,
+        "profile": {"nickname": "Admin", "avatar": None, "secondaryTitle": None}
+    }
+    write_user(u)
+    print(f"✅ Bootstrap admin vytvořen: {ADMIN_EMAIL}. Po přihlášení přepni ADMIN_BOOT_ENABLE=false.")
 
+def _mask(s: str, keep=2):
+    if not s: return "<empty>"
+    return (s[:keep] + "…" + s[-keep:]) if len(s) > keep*2 else "***"
+
+def print_config_summary():
+    print("— Config —")
+    print("PORT:", os.getenv("PORT","8000"))
+    print("GCS_BUCKET:", GCS_BUCKET or "<empty>")
+    print("ANIME_JSON_CLOUD:", ANIME_JSON_CLOUD)
+    print("USERS_JSON_CLOUD:", USERS_JSON_CLOUD)
+    print("SMTP_HOST:", SMTP_HOST or "<empty>", "PORT:", SMTP_PORT, "STARTTLS:", SMTP_STARTTLS)
+    print("SMTP_USER:", _mask(SMTP_USER))
+    print(".env present:", os.path.exists(os.path.join(ROOT, ".env")))
+
+# =========================
+# Run
+# =========================
 def run():
     ensure_dirs()
+    print_config_summary()
+    ensure_bootstrap_admin()
     port = int(os.getenv("PORT", "8000"))
     httpd = HTTPServer(("0.0.0.0", port), Handler)
     print(f"✅ Server běží na http://0.0.0.0:{port}")
