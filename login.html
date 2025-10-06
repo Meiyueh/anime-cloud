@@ -6,22 +6,18 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="stylesheet" href="styles/main.css" />
   <style>
-    /* vycentrované panely + centrace textů a ovládacích prvků */
     .panel-auth{max-width:480px;margin:0 auto;}
     .panel-auth form{display:flex;flex-direction:column;gap:.8rem;align-items:center;text-align:center}
     .panel-auth .row{width:100%;align-items:center}
     .panel-auth label{width:100%;text-align:center}
     .panel-auth input{width:75% !important;min-width:220px;text-align:center}
-    .panel-auth .row.align-right,
-    .panel-auth .row .w-compact-sm{display:flex;justify-content:center}
+    .panel-auth .row.align-right,.panel-auth .row .w-compact-sm{display:flex;justify-content:center}
     .link-swap{display:block;text-align:center;margin-top:.5rem}
   </style>
 </head>
 <body>
   <header class="site-header">
-    <a href="index.html" class="brand">
-      <img src="assets/logo.svg" alt="AnimeCloud" />
-    </a>
+    <a href="index.html" class="brand"><img src="assets/logo.svg" alt="AnimeCloud" /></a>
     <nav class="top-nav">
       <a href="index.html">Info</a>
       <a href="upload.html" id="nav-upload" class="hidden">Upload</a>
@@ -112,19 +108,27 @@
 
       try{
         const r = await fetch(App.api('/auth/login'), {
-          method:'POST',
-          headers:{'Content-Type':'application/json'},
+          method:'POST', headers:{'Content-Type':'application/json'},
           body: JSON.stringify({ email, password })
         });
         const payload = await r.json().catch(()=> ({}));
         if (!r.ok || !payload?.ok) {
+          if (payload?.error === 'not_verified') {
+            msg.innerHTML = `Účet ještě není ověřen. <button id="btnResend" class="w-compact-sm" style="margin-left:6px">Poslat znovu</button>`;
+            const btn = document.getElementById('btnResend');
+            if (btn) btn.addEventListener('click', async ()=>{
+              try {
+                const rr = await fetch(App.api('/auth/resend'), { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({email}) });
+                if (rr.ok) App.showMsg(msg,'Ověřovací e-mail znovu odeslán.','ok'); else App.showMsg(msg,'Nepodařilo se odeslat.','error');
+              } catch { App.showMsg(msg,'Chyba připojení.','error'); }
+            });
+            return;
+          }
           const err = payload?.error || ('HTTP '+r.status);
-          if (r.status === 403) return App.showMsg(msg, 'Účet ještě není ověřen. Zkontrolujte e-mail.', 'error');
           return App.showMsg(msg, 'Přihlášení selhalo: ' + err, 'error');
         }
-        // ulož auth do LS pro navbar/stránky
-        const { token, user } = payload;
-        const authObj = { email: user.email, role: user.role, token, profile: (user.profile||{}), at: Date.now() };
+        // uložit auth do LS (payload: { ok, email, role })
+        const authObj = { email: payload.email, role: payload.role, at: Date.now() };
         localStorage.setItem('animecloud_auth', JSON.stringify(authObj));
         App.toast('Přihlášeno', 'ok');
         location.href='index.html';
@@ -133,7 +137,7 @@
       }
     });
 
-    // REGISTER -> /auth/register (2× heslo)
+    // REGISTER -> /auth/register (posíláme password i password2)
     document.getElementById('registerForm').addEventListener('submit', async e => {
       e.preventDefault();
       const email = document.getElementById('regEmail').value.trim();
@@ -145,9 +149,8 @@
 
       try{
         const r = await fetch(App.api('/auth/register'), {
-          method:'POST',
-          headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({ email, password: p1 })
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ email, password: p1, password2: p2 })
         });
         const payload = await r.json().catch(()=> ({}));
         if (!r.ok || !payload?.ok) {
@@ -156,7 +159,6 @@
           return App.showMsg(msg, 'Registrace selhala: ' + err, 'error');
         }
         App.showMsg(msg, '✅ Registrace proběhla. Zkontrolujte e-mail a potvrďte účet.', 'ok');
-        // přepnout zpět na login
         panelRegister.classList.add('hidden');
         panelLogin.classList.remove('hidden');
         document.getElementById('loginEmail').value = email;
