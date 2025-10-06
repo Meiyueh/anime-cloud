@@ -20,9 +20,13 @@ GCS_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
 
 # Cesty v bucketu
 ANIME_JSON_CLOUD = os.getenv("ANIME_JSON_CLOUD", "data/anime.json").strip()
-USERS_JSON_CLOUD = os.getenv("USERS_JSON_CLOUD", "private/users/users.json").strip()
 
-# SMTP
+# Users storage: "dir" (výchozí) = jeden JSON na uživatele, "file" = vše v jednom JSON
+USERS_STORAGE_MODE = os.getenv("USERS_STORAGE_MODE", "dir").strip().lower()
+USERS_JSON_CLOUD   = os.getenv("USERS_JSON_CLOUD", "private/users/users.json").strip()
+USERS_DIR_CLOUD    = os.getenv("USERS_DIR_CLOUD", "private/users").strip()
+
+# SMTP (Gmail s App Password)
 SMTP_HOST = os.getenv("SMTP_HOST", "").strip()
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587") or "587")
 SMTP_USER = os.getenv("SMTP_USER", "").strip()
@@ -74,7 +78,6 @@ def html_response(h, status: int, html: str):
     h.wfile.write(html.encode("utf-8"))
 
 def site_base(h) -> str:
-    # respektuj reverzní proxy
     xf_proto = h.headers.get("X-Forwarded-Proto")
     xf_host  = h.headers.get("X-Forwarded-Host")
     if xf_proto and xf_host:
@@ -175,7 +178,6 @@ def read_anime_list() -> list:
 
 def write_anime_list(items: list) -> str:
     raw = json.dumps(items, ensure_ascii=False, indent=2).encode("utf-8")
-    # nechceme immutable public cache pro JSON katalog (ať se nelepí stará verze)
     client = _ensure_gcs()
     bucket = client.bucket(GCS_BUCKET)
     blob = bucket.blob(ANIME_JSON_CLOUD)
@@ -183,36 +185,88 @@ def write_anime_list(items: list) -> str:
     return gcs_public_url(ANIME_JSON_CLOUD)
 
 # =========================
-# Users (single file: private/users/users.json)
+# Users (GCS): režim "dir" (výchozí) nebo "file"
+#   file -> jeden JSON: USERS_JSON_CLOUD (např. private/users/users.json)
+#   dir  -> jeden JSON na uživatele: private/users/<email-safe>.json
 # =========================
+def _users_mode(): return "dir" if USERS_STORAGE_MODE == "dir" else "file"
+def _users_file(): return USERS_JSON_CLOUD
+def _users_dir():  return USERS_DIR_CLOUD.strip("/")
+
+def _user_obj_key(email: str) -> str:
+    # pojmenuj soubor podle e-mailu (vyčištěno), např. private/users/admin@localanim.json
+    return f"{_users_dir()}/{safe_name((email or '').lower())}.json"
+
 def read_users_map() -> dict:
-    b = download_bytes(USERS_JSON_CLOUD)
-    if not b: return {}
-    try: return json.loads(b.decode("utf-8"))
-    except Exception: return {}
+    if _users_mode() == "file":
+        b = download_bytes(_users_file())
+        if not b: return {}
+        try: return json.loads(b.decode("utf-8"))
+        except: return {}
+    # dir mode
+    client = _ensure_gcs()
+    bucket = client.bucket(GCS_BUCKET)
+    out = {}
+    for blob in client.list_blobs(bucket, prefix=_users_dir()+"/"):
+        if not blob.name.lower().endswith(".json"): continue
+        try:
+            data = json.loads(blob.download_as_bytes().decode("utf-8"))
+            email = (data.get("email") or "").lower()
+            if email: out[email] = data
+        except Exception:
+            continue
+    return out
 
 def write_users_map(obj: dict) -> None:
+    if _users_mode() != "file":
+        raise RuntimeError("write_users_map is file-only")
     raw = json.dumps(obj, ensure_ascii=False, indent=2).encode("utf-8")
     client = _ensure_gcs()
     bucket = client.bucket(GCS_BUCKET)
-    blob = bucket.blob(USERS_JSON_CLOUD)
-    # soukromý objekt – žádný public cache-control
-    blob.upload_from_string(raw, content_type="application/json; charset=utf-8")
+    bucket.blob(_users_file()).upload_from_string(raw, content_type="application/json; charset=utf-8")
 
 def read_user(email: str) -> dict|None:
     email = (email or "").strip().lower()
     if not email: return None
-    return read_users_map().get(email)
+    if _users_mode() == "file":
+        return read_users_map().get(email)
+    b = download_bytes(_user_obj_key(email))
+    if not b: return None
+    try: return json.loads(b.decode("utf-8"))
+    except: return None
 
 def write_user(u: dict) -> None:
     email = (u.get("email") or "").strip().lower()
     if not email: raise ValueError("user.email is required")
-    users = read_users_map()
-    users[email] = u
-    write_users_map(users)
+    if _users_mode() == "file":
+        users = read_users_map()
+        users[email] = u
+        write_users_map(users); return
+    raw = json.dumps(u, ensure_ascii=False, indent=2).encode("utf-8")
+    client = _ensure_gcs()
+    bucket = client.bucket(GCS_BUCKET)
+    bucket.blob(_user_obj_key(email)).upload_from_string(raw, content_type="application/json; charset=utf-8")
+
+def delete_user(email: str) -> bool:
+    email = (email or "").strip().lower()
+    if not email: return False
+    if _users_mode() == "file":
+        users = read_users_map()
+        if email in users:
+            del users[email]; write_users_map(users); return True
+        return False
+    client = _ensure_gcs()
+    bucket = client.bucket(GCS_BUCKET)
+    blob = bucket.blob(_user_obj_key(email))
+    if blob.exists(client): blob.delete(); return True
+    return False
 
 def users_count() -> int:
-    return len(read_users_map())
+    if _users_mode() == "file":
+        return len(read_users_map())
+    client = _ensure_gcs()
+    bucket = client.bucket(GCS_BUCKET)
+    return sum(1 for b in client.list_blobs(bucket, prefix=_users_dir()+"/") if b.name.lower().endswith(".json"))
 
 # =========================
 # Cover z data:URL
@@ -253,17 +307,14 @@ def send_email(to_addr: str, subject: str, html: str, text: str|None=None):
         if SMTP_STARTTLS:
             server = smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30)
             if SMTP_DEBUG: server.set_debuglevel(1)
-            server.ehlo()
-            server.starttls(context=ssl.create_default_context())
+            server.ehlo(); server.starttls(context=ssl.create_default_context())
             server.login(SMTP_USER, SMTP_PASS)
-            server.send_message(msg)
-            server.quit()
+            server.send_message(msg); server.quit()
         else:
             server = smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=30)
             if SMTP_DEBUG: server.set_debuglevel(1)
             server.login(SMTP_USER, SMTP_PASS)
-            server.send_message(msg)
-            server.quit()
+            server.send_message(msg); server.quit()
         return True, None
     except Exception as e:
         return False, str(e)
@@ -272,8 +323,7 @@ def send_email(to_addr: str, subject: str, html: str, text: str|None=None):
 # Auth utility
 # =========================
 def scrypt_hash(password: str, salt: bytes|None=None):
-    if salt is None:
-        salt = os.urandom(16)
+    if salt is None: import os as _os; salt = _os.urandom(16)
     h = hashlib.scrypt(password.encode("utf-8"), salt=salt, n=16384, r=8, p=1)
     return base64.b64encode(h).decode("ascii"), base64.b64encode(salt).decode("ascii")
 
@@ -304,7 +354,6 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             if self.path.startswith("/auth/verify"):
                 return self.handle_auth_verify_get()
-            # fallback: statické soubory
             return super().do_GET()
         except Exception as e:
             traceback.print_exc()
@@ -470,7 +519,6 @@ class Handler(SimpleHTTPRequestHandler):
         if read_user(email):
             return json_response(self, 409, {"ok": False, "error": "exists"})
 
-        # hash a token
         h, salt = scrypt_hash(password)
         import secrets
         token = secrets.token_urlsafe(32)
@@ -487,15 +535,13 @@ class Handler(SimpleHTTPRequestHandler):
         }
         write_user(user_obj)
 
-        # ověřovací odkaz (GET endpoint)
         vurl = f"{site_base(self)}/auth/verify?{urlencode({'email': email, 'token': token})}"
-
         html = f"""
         <div style="font-family:sans-serif;line-height:1.5">
           <h2>Vítej v AnimeCloud 👋</h2>
           <p>Potvrď prosím svůj e-mail kliknutím na tlačítko:</p>
           <p><a href="{vurl}" style="background:#7c5cff;color:#fff;padding:10px 14px;border-radius:8px;text-decoration:none">Ověřit účet</a></p>
-          <p>Pokud tlačítko nefunguje, použij tento odkaz: <br><a href="{vurl}">{vurl}</a></p>
+          <p>Pokud tlačítko nefunguje, použij tento odkaz: <a href="{vurl}">{vurl}</a></p>
         </div>
         """
         ok, err = send_email(email, "Ověření účtu — AnimeCloud", html, text=f"Ověř svůj účet: {vurl}")
@@ -507,7 +553,6 @@ class Handler(SimpleHTTPRequestHandler):
         return json_response(self, 200, resp)
 
     def handle_auth_verify_post(self):
-        # JSON POST {email, token}
         length = int(self.headers.get("Content-Length", "0"))
         try:
             data = json.loads(self.rfile.read(length) or b"{}")
@@ -518,7 +563,6 @@ class Handler(SimpleHTTPRequestHandler):
         return self._verify_core(email, token, as_html=False)
 
     def handle_auth_verify_get(self):
-        # GET /auth/verify?email=&token=
         q = parse_qs(urlparse(self.path).query)
         email = (q.get("email", [""])[0] or "").strip().lower()
         token = q.get("token", [""])[0] or ""
@@ -593,7 +637,7 @@ def print_config_summary():
     print("PORT:", os.getenv("PORT","8000"))
     print("GCS_BUCKET:", GCS_BUCKET or "<empty>")
     print("ANIME_JSON_CLOUD:", ANIME_JSON_CLOUD)
-    print("USERS_JSON_CLOUD:", USERS_JSON_CLOUD)
+    print("USERS_STORAGE_MODE:", USERS_STORAGE_MODE, "USERS_DIR_CLOUD:", USERS_DIR_CLOUD, "USERS_JSON_CLOUD:", USERS_JSON_CLOUD)
     print("SMTP_HOST:", SMTP_HOST or "<empty>", "PORT:", SMTP_PORT, "STARTTLS:", SMTP_STARTTLS)
     print("SMTP_USER:", _mask(SMTP_USER))
     print(".env present:", os.path.exists(os.path.join(ROOT, ".env")))
