@@ -6,12 +6,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="stylesheet" href="styles/main.css" />
   <style>
-    /* centrování textu i polí uvnitř panelů */
-    #panel-login, #panel-register { text-align:center; }
-    #panel-login form, #panel-register form { display:inline-block; text-align:center; }
-    #panel-login label, #panel-register label { text-align:center; width:100%; }
-    #panel-login input, #panel-register input { text-align:center; }
-    #panel-login .row.align-right, #panel-register .row.align-right { justify-content:center; }
+    /* vycentrované panely + centrace textů a ovládacích prvků */
+    .panel-auth{max-width:480px;margin:0 auto;}
+    .panel-auth form{display:flex;flex-direction:column;gap:.8rem;align-items:center;text-align:center}
+    .panel-auth .row{width:100%;align-items:center}
+    .panel-auth label{width:100%;text-align:center}
+    .panel-auth input{width:75% !important;min-width:220px;text-align:center}
+    .panel-auth .row.align-right,
+    .panel-auth .row .w-compact-sm{display:flex;justify-content:center}
+    .link-swap{display:block;text-align:center;margin-top:.5rem}
   </style>
 </head>
 <body>
@@ -33,44 +36,44 @@
   <main class="container">
     <h1 style="text-align:center;">Přihlášení / Registrace</h1>
 
-    <!-- LOGIN panel -->
-    <div class="card" id="panel-login" style="max-width:460px;margin:0 auto;">
+    <!-- LOGIN -->
+    <div class="card panel-auth" id="panel-login">
       <form id="loginForm" class="compact">
         <div class="row compact">
           <label for="loginEmail">E-mail</label>
-          <input type="email" id="loginEmail" class="w-compact" required />
+          <input type="email" id="loginEmail" required />
         </div>
         <div class="row compact">
           <label for="loginPass">Heslo</label>
-          <input type="password" id="loginPass" class="w-compact" required />
+          <input type="password" id="loginPass" required />
         </div>
-        <div class="row align-right"><button type="submit" class="w-compact-sm">Přihlásit</button></div>
+        <div class="row align-right">
+          <button type="submit" class="w-compact-sm">Přihlásit</button>
+        </div>
       </form>
-      <p class="muted" style="text-align:center;margin-top:.5rem;">Nemáte účet?
-        <a href="#" id="link-show-register">Zaregistrujte se</a>
-      </p>
+      <a href="#" class="link-swap" id="link-show-register">Nemáte účet? Zaregistrujte se</a>
     </div>
 
-    <!-- REGISTER panel -->
-    <div class="card hidden" id="panel-register" style="max-width:460px;margin:12px auto 0;">
-      <form id="registerForm" class="compact hidden">
+    <!-- REGISTER -->
+    <div class="card panel-auth hidden" id="panel-register">
+      <form id="registerForm" class="compact">
         <div class="row compact">
           <label for="regEmail">E-mail</label>
-          <input type="email" id="regEmail" class="w-compact" required />
+          <input type="email" id="regEmail" required />
         </div>
         <div class="row compact">
-          <label for="regPass">Heslo</label>
-          <input type="password" id="regPass" class="w-compact" required />
+          <label for="regPass1">Heslo</label>
+          <input type="password" id="regPass1" required />
         </div>
         <div class="row compact">
           <label for="regPass2">Potvrzení hesla</label>
-          <input type="password" id="regPass2" class="w-compact" required />
+          <input type="password" id="regPass2" required />
         </div>
-        <div class="row align-right"><button type="submit" class="w-compact-sm">Registrovat</button></div>
+        <div class="row align-right">
+          <button type="submit" class="w-compact-sm">Registrovat</button>
+        </div>
       </form>
-      <p class="muted" style="text-align:center;margin-top:.5rem;">Máte účet?
-        <a href="#" id="link-show-login">Přihlaste se</a>
-      </p>
+      <a href="#" class="link-swap" id="link-show-login">Máte účet? Přihlaste se</a>
     </div>
 
     <p id="loginMsg" class="msg" style="text-align:center;"></p>
@@ -82,77 +85,84 @@
   <script>
     App.initNavbar();
 
+    const msg = document.getElementById('loginMsg');
     const panelLogin = document.getElementById('panel-login');
     const panelRegister = document.getElementById('panel-register');
-    const msg = document.getElementById('loginMsg');
 
     // přepínání panelů
     document.getElementById('link-show-register').addEventListener('click', e => {
       e.preventDefault();
       panelLogin.classList.add('hidden');
       panelRegister.classList.remove('hidden');
-      document.getElementById('registerForm').classList.remove('hidden');
       msg.textContent='';
     });
     document.getElementById('link-show-login').addEventListener('click', e => {
       e.preventDefault();
       panelRegister.classList.add('hidden');
       panelLogin.classList.remove('hidden');
-      document.getElementById('registerForm').classList.add('hidden');
       msg.textContent='';
     });
 
-    // LOGIN → POST /auth/login
+    // LOGIN -> /auth/login
     document.getElementById('loginForm').addEventListener('submit', async e => {
       e.preventDefault();
       const email = document.getElementById('loginEmail').value.trim();
-      const pass = document.getElementById('loginPass').value.trim();
+      const password = document.getElementById('loginPass').value.trim();
+      if (!email || !password) return App.showMsg(msg, 'Vyplňte e-mail i heslo.', 'error');
+
       try{
         const r = await fetch(App.api('/auth/login'), {
-          method:'POST', headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({ email, password: pass })
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ email, password })
         });
-        const p = await r.json().catch(()=> ({}));
-        if (!r.ok || !p.ok) throw new Error(p.error || ('HTTP '+r.status));
-        // ulož token + info do stejného klíče, který používá zbytek webu
-        const auth = { email, role: (p.user?.role||'user'), token: p.token, at: Date.now() };
-        localStorage.setItem('animecloud_auth', JSON.stringify(auth));
-        App.toast('Přihlášeno','ok');
+        const payload = await r.json().catch(()=> ({}));
+        if (!r.ok || !payload?.ok) {
+          const err = payload?.error || ('HTTP '+r.status);
+          if (r.status === 403) return App.showMsg(msg, 'Účet ještě není ověřen. Zkontrolujte e-mail.', 'error');
+          return App.showMsg(msg, 'Přihlášení selhalo: ' + err, 'error');
+        }
+        // ulož auth do LS pro navbar/stránky
+        const { token, user } = payload;
+        const authObj = { email: user.email, role: user.role, token, profile: (user.profile||{}), at: Date.now() };
+        localStorage.setItem('animecloud_auth', JSON.stringify(authObj));
+        App.toast('Přihlášeno', 'ok');
         location.href='index.html';
       } catch(err){
-        App.showMsg(msg, '⚠️ ' + (err.message || 'Chyba přihlášení'), 'error');
+        App.showMsg(msg, 'Chyba připojení.', 'error');
       }
     });
 
-    // REGISTER → POST /auth/register (s potvrzením hesla)
+    // REGISTER -> /auth/register (2× heslo)
     document.getElementById('registerForm').addEventListener('submit', async e => {
       e.preventDefault();
       const email = document.getElementById('regEmail').value.trim();
-      const p1 = document.getElementById('regPass').value.trim();
+      const p1 = document.getElementById('regPass1').value.trim();
       const p2 = document.getElementById('regPass2').value.trim();
-      if (p1 !== p2) return App.showMsg(msg, '⚠️ Hesla se neshodují.', 'error');
+      if (!email || !p1 || !p2) return App.showMsg(msg,'Vyplňte všechna pole.','error');
+      if (p1.length < 8) return App.showMsg(msg,'Heslo musí mít alespoň 8 znaků.','error');
+      if (p1 !== p2) return App.showMsg(msg,'Hesla se neshodují.','error');
+
       try{
         const r = await fetch(App.api('/auth/register'), {
-          method:'POST', headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({ email, password1: p1, password2: p2 })
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ email, password: p1 })
         });
-        const p = await r.json().catch(()=> ({}));
-        if (!r.ok || !p.ok) throw new Error(p.error || ('HTTP '+r.status));
-        // pro vývoj: zobrazíme link, v produkci přijde e-mail
-        App.showMsg(msg, '✅ Registrace proběhla. Ověřovací e-mail byl odeslán.', 'ok');
-        if (p.verify_url){
-          const a = document.createElement('a');
-          a.href = p.verify_url; a.textContent = 'Klikni zde pro ověření (vývoj)';
-          a.style.display = 'block'; a.style.marginTop = '.5rem';
-          msg.appendChild(a);
+        const payload = await r.json().catch(()=> ({}));
+        if (!r.ok || !payload?.ok) {
+          const err = payload?.error || ('HTTP '+r.status);
+          if (r.status === 409) return App.showMsg(msg,'Účet pro tento e-mail už existuje.','error');
+          return App.showMsg(msg, 'Registrace selhala: ' + err, 'error');
         }
-        // návrat na login panel
+        App.showMsg(msg, '✅ Registrace proběhla. Zkontrolujte e-mail a potvrďte účet.', 'ok');
+        // přepnout zpět na login
         panelRegister.classList.add('hidden');
         panelLogin.classList.remove('hidden');
         document.getElementById('loginEmail').value = email;
         document.getElementById('loginPass').focus();
-      } catch(err){
-        App.showMsg(msg, '⚠️ ' + (err.message || 'Chyba registrace'), 'error');
+      } catch {
+        App.showMsg(msg, 'Chyba připojení.', 'error');
       }
     });
   </script>
