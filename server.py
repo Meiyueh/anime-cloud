@@ -185,16 +185,13 @@ def write_anime_list(items: list) -> str:
     return gcs_public_url(ANIME_JSON_CLOUD)
 
 # =========================
-# Users (GCS): režim "dir" (výchozí) nebo "file"
-#   file -> jeden JSON: USERS_JSON_CLOUD (např. private/users/users.json)
-#   dir  -> jeden JSON na uživatele: private/users/<email-safe>.json
+# Users (GCS): "dir" (výchozí) nebo "file"
 # =========================
 def _users_mode(): return "dir" if USERS_STORAGE_MODE == "dir" else "file"
 def _users_file(): return USERS_JSON_CLOUD
 def _users_dir():  return USERS_DIR_CLOUD.strip("/")
 
 def _user_obj_key(email: str) -> str:
-    # pojmenuj soubor podle e-mailu (vyčištěno), např. private/users/admin@localanim.json
     return f"{_users_dir()}/{safe_name((email or '').lower())}.json"
 
 def read_users_map() -> dict:
@@ -203,7 +200,6 @@ def read_users_map() -> dict:
         if not b: return {}
         try: return json.loads(b.decode("utf-8"))
         except: return {}
-    # dir mode
     client = _ensure_gcs()
     bucket = client.bucket(GCS_BUCKET)
     out = {}
@@ -566,6 +562,7 @@ class Handler(SimpleHTTPRequestHandler):
         q = parse_qs(urlparse(self.path).query)
         email = (q.get("email", [""])[0] or "").strip().lower()
         token = q.get("token", [""])[0] or ""
+        # HTML režim: _verify_core samo pošle odpověď
         self._verify_core(email, token, as_html=True)
 
     def _verify_core(self, email: str, token: str, as_html: bool):
@@ -578,31 +575,30 @@ class Handler(SimpleHTTPRequestHandler):
                     "<h1>Ověření selhalo</h1><p>Neplatný odkaz nebo e-mail.</p>"
                 )
             return json_response(self, 400, {"ok": False, "error": "invalid"})
-    
-        # označit jako ověřený
+
         u["verified"] = True
         u.pop("verify_token", None)
         write_user(u)
-    
+
         if as_html:
             login_url = f"{site_base(self)}/login.html"
             html = f"""<!doctype html>
-    <html lang="cs">
-    <meta charset="utf-8">
-    <title>Účet ověřen</title>
-    <meta http-equiv="refresh" content="1;url={login_url}">
-    <style>
-      body{{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;padding:24px}}
-      .ok{{display:inline-block;background:#e9f7ef;color:#1e7e34;border:1px solid #c3e6cb;
-           border-radius:8px;padding:10px 12px;margin-bottom:12px}}
-      a.button{{display:inline-block;background:#7c5cff;color:#fff;text-decoration:none;
-           padding:8px 12px;border-radius:8px}}
-    </style>
-    <h1>Účet ověřen <span class="ok">✅</span></h1>
-    <p>Nyní se můžete přihlásit.</p>
-    <p><a class="button" href="{login_url}">Pokračovat na přihlášení</a></p>
-    <script>setTimeout(function(){{ location.href = "{login_url}"; }}, 1000);</script>
-    </html>"""
+<html lang="cs">
+<meta charset="utf-8">
+<title>Účet ověřen</title>
+<meta http-equiv="refresh" content="1;url={login_url}">
+<style>
+  body{{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;padding:24px}}
+  .ok{{display:inline-block;background:#e9f7ef;color:#1e7e34;border:1px solid #c3e6cb;
+       border-radius:8px;padding:10px 12px;margin-bottom:12px}}
+  a.button{{display:inline-block;background:#7c5cff;color:#fff;text-decoration:none;
+       padding:8px 12px;border-radius:8px}}
+</style>
+<h1>Účet ověřen <span class="ok">✅</span></h1>
+<p>Nyní se můžete přihlásit.</p>
+<p><a class="button" href="{login_url}">Pokračovat na přihlášení</a></p>
+<script>setTimeout(function(){{ location.href = "{login_url}"; }}, 1000);</script>
+</html>"""
             return html_response(self, 200, html)
 
         return json_response(self, 200, {"ok": True})
@@ -681,5 +677,3 @@ def run():
 
 if __name__ == "__main__":
     run()
-
-
