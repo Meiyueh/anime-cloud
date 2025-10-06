@@ -21,7 +21,7 @@ GCS_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
 # Cesty v bucketu
 ANIME_JSON_CLOUD = os.getenv("ANIME_JSON_CLOUD", "data/anime.json").strip()
 
-# Users storage: "dir" (výchozí) = jeden JSON na uživatele, "file" = vše v jednom JSON
+# Users storage: "dir" (výchozí) = 1 JSON / uživatel, "file" = vše v jednom JSON
 USERS_STORAGE_MODE = os.getenv("USERS_STORAGE_MODE", "dir").strip().lower()
 USERS_JSON_CLOUD   = os.getenv("USERS_JSON_CLOUD", "private/users/users.json").strip()
 USERS_DIR_CLOUD    = os.getenv("USERS_DIR_CLOUD", "private/users").strip()
@@ -35,9 +35,10 @@ SMTP_FROM = os.getenv("SMTP_FROM", SMTP_USER or "").strip()
 SMTP_STARTTLS = os.getenv("SMTP_STARTTLS", "true").lower() == "true"
 SMTP_DEBUG = int(os.getenv("SMTP_DEBUG", "0") or "0")
 
-# DEV usnadnění
+# Ladící přepínače
 DEV_ECHO_VERIFICATION_LINK = os.getenv("DEV_ECHO_VERIFICATION_LINK", "false").lower() == "true"
 DEV_SAVE_LAST_EMAIL = os.getenv("DEV_SAVE_LAST_EMAIL", "false").lower() == "true"
+DEBUG_AUTH = os.getenv("DEBUG_AUTH", "false").lower() == "true"  # /auth/debug
 
 # Admin bootstrap (zapnout jen na první start)
 ADMIN_BOOT_ENABLE = os.getenv("ADMIN_BOOT_ENABLE", "false").lower() == "true"
@@ -286,7 +287,7 @@ def send_email(to_addr: str, subject: str, html: str, text: str|None=None):
         return False, "SMTP not configured"
     try:
         msg = EmailMessage()
-        msg["From"] = SMTP_FROM
+        msg["From"] = SMTP_FROM if SMTP_FROM else SMTP_USER
         msg["To"] = to_addr
         msg["Subject"] = subject
         if text:
@@ -350,6 +351,8 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             if self.path.startswith("/auth/verify"):
                 return self.handle_auth_verify_get()
+            if self.path.startswith("/auth/debug"):
+                return self.handle_auth_debug()
             return super().do_GET()
         except Exception as e:
             traceback.print_exc()
@@ -562,32 +565,29 @@ class Handler(SimpleHTTPRequestHandler):
         q = parse_qs(urlparse(self.path).query)
         email = (q.get("email", [""])[0] or "").strip().lower()
         token = q.get("token", [""])[0] or ""
-        # HTML režim: _verify_core samo pošle odpověď
         self._verify_core(email, token, as_html=True)
 
     def _verify_core(self, email: str, token: str, as_html: bool):
-        # normalizace
         email = (email or "").strip().lower()
         token = (token or "").strip()
-    
-        # 1) pokus č.1 (aktuální režim)
+
+        # 1) podle aktivního režimu
         u = read_user(email)
-    
-        # 2) fallback – projít mapu (ať už je MODE dir nebo file), kdyby byl uložen jinak
+        # 2) fallback přes mapu (ať už je režim jakýkoli)
         if not u:
             try:
-                m = read_users_map()  # v dir režimu se projdou JSONy v adresáři, ve file režimu se načte users.json
+                m = read_users_map()
                 u = m.get(email)
             except Exception:
                 u = None
-    
-        # log do konzole (uvidíš v journalctl -f)
+
+        # ladící log do konzole
         try:
             print(f"[verify] email={email} user_found={bool(u)} token_param_len={len(token) if token else 0} "
                   f"has_user_token={bool(u and u.get('verify_token'))}")
         except Exception:
             pass
-    
+
         if not u or not token or token != u.get("verify_token"):
             if as_html:
                 return html_response(
@@ -596,35 +596,34 @@ class Handler(SimpleHTTPRequestHandler):
                     "<h1>Ověření selhalo</h1><p>Neplatný odkaz nebo e-mail.</p>"
                 )
             return json_response(self, 400, {"ok": False, "error": "invalid"})
-    
-        # označit jako ověřený
+
         u["verified"] = True
         u.pop("verify_token", None)
         write_user(u)
-    
+
         if as_html:
             login_url = f"{site_base(self)}/login.html"
             html = f"""<!doctype html>
-    <html lang="cs">
-    <meta charset="utf-8">
-    <title>Účet ověřen</title>
-    <meta http-equiv="refresh" content="1;url={login_url}">
-    <style>
-      body{{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;padding:24px}}
-      .ok{{display:inline-block;background:#e9f7ef;color:#1e7e34;border:1px solid #c3e6cb;
-           border-radius:8px;padding:10px 12px;margin-bottom:12px}}
-      a.button{{display:inline-block;background:#7c5cff;color:#fff;text-decoration:none;
-           padding:8px 12px;border-radius:8px}}
-    </style>
-    <h1>Účet ověřen <span class="ok">✅</span></h1>
-    <p>Nyní se můžete přihlásit.</p>
-    <p><a class="button" href="{login_url}">Pokračovat na přihlášení</a></p>
-    <script>setTimeout(function(){{ location.href = "{login_url}"; }}, 1000);</script>
-    </html>"""
+<html lang="cs">
+<meta charset="utf-8">
+<title>Účet ověřen</title>
+<meta http-equiv="refresh" content="1;url={login_url}">
+<style>
+  body{{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;padding:24px}}
+  .ok{{display:inline-block;background:#e9f7ef;color:#1e7e34;border:1px solid #c3e6cb;
+       border-radius:8px;padding:10px 12px;margin-bottom:12px}}
+  a.button{{display:inline-block;background:#7c5cff;color:#fff;text-decoration:none;
+       padding:8px 12px;border-radius:8px}}
+</style>
+<h1>Účet ověřen <span class="ok">✅</span></h1>
+<p>Nyní se můžete přihlásit.</p>
+<p><a class="button" href="{login_url}">Pokračovat na přihlášení</a></p>
+<script>setTimeout(function(){{ location.href = "{login_url}"; }}, 1000);</script>
+</html>"""
             return html_response(self, 200, html)
-    
+
         return json_response(self, 200, {"ok": True})
-        
+
     def handle_auth_login(self):
         length = int(self.headers.get("Content-Length", "0"))
         try:
@@ -647,6 +646,37 @@ class Handler(SimpleHTTPRequestHandler):
             "ok": True,
             "token": token,
             "user": {"email": email, "role": u.get("role","user"), "profile": u.get("profile",{})}
+        })
+
+    # --- /auth/debug?email=... (zapnout DEBUG_AUTH=true) ---
+    def handle_auth_debug(self):
+        if not DEBUG_AUTH:
+            return json_response(self, 404, {"ok": False, "error": "disabled"})
+        q = parse_qs(urlparse(self.path).query)
+        email = (q.get("email", [""])[0] or "").strip().lower()
+        u = read_user(email)
+        via = "direct" if u else "none"
+        if not u:
+            try:
+                m = read_users_map()
+                u = m.get(email)
+                via = "map" if u else "none"
+            except Exception:
+                u = None
+                via = "error"
+        if not u:
+            return json_response(self, 404, {"ok": False, "found": False, "via": via})
+        return json_response(self, 200, {
+            "ok": True,
+            "found": True,
+            "via": via,
+            "email": u.get("email"),
+            "verified": u.get("verified"),
+            "has_verify_token": bool(u.get("verify_token")),
+            "verify_token_len": len(u.get("verify_token", "")),
+            "users_mode": USERS_STORAGE_MODE,
+            "users_dir": USERS_DIR_CLOUD,
+            "users_file": USERS_JSON_CLOUD
         })
 
 # =========================
@@ -699,4 +729,3 @@ def run():
 
 if __name__ == "__main__":
     run()
-
