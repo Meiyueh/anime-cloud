@@ -568,44 +568,44 @@ class Handler(SimpleHTTPRequestHandler):
         token = q.get("token", [""])[0] or ""
         self._verify_core(email, token, as_html=True)
 
-def _verify_core(self, email: str, token: str, as_html: bool):
-    u = read_user(email)
-    if not u or not token or token != u.get("verify_token"):
+    def _verify_core(self, email: str, token: str, as_html: bool):
+        u = read_user(email)
+        if not u or not token or token != u.get("verify_token"):
+            if as_html:
+                return html_response(
+                    self, 400,
+                    "<!doctype html><meta charset='utf-8'>"
+                    "<h1>Ověření selhalo</h1><p>Neplatný odkaz nebo e-mail.</p>"
+                )
+            return json_response(self, 400, {"ok": False, "error": "invalid"})
+    
+        # označit jako ověřený
+        u["verified"] = True
+        u.pop("verify_token", None)
+        write_user(u)
+    
         if as_html:
-            return html_response(
-                self, 400,
-                "<!doctype html><meta charset='utf-8'>"
-                "<h1>Ověření selhalo</h1><p>Neplatný odkaz nebo e-mail.</p>"
-            )
-        return json_response(self, 400, {"ok": False, "error": "invalid"})
+            login_url = f"{site_base(self)}/login.html"
+            html = f"""<!doctype html>
+    <html lang="cs">
+    <meta charset="utf-8">
+    <title>Účet ověřen</title>
+    <meta http-equiv="refresh" content="1;url={login_url}">
+    <style>
+      body{{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;padding:24px}}
+      .ok{{display:inline-block;background:#e9f7ef;color:#1e7e34;border:1px solid #c3e6cb;
+           border-radius:8px;padding:10px 12px;margin-bottom:12px}}
+      a.button{{display:inline-block;background:#7c5cff;color:#fff;text-decoration:none;
+           padding:8px 12px;border-radius:8px}}
+    </style>
+    <h1>Účet ověřen <span class="ok">✅</span></h1>
+    <p>Nyní se můžete přihlásit.</p>
+    <p><a class="button" href="{login_url}">Pokračovat na přihlášení</a></p>
+    <script>setTimeout(function(){{ location.href = "{login_url}"; }}, 1000);</script>
+    </html>"""
+            return html_response(self, 200, html)
 
-    # označit jako ověřený
-    u["verified"] = True
-    u.pop("verify_token", None)
-    write_user(u)
-
-    if as_html:
-        login_url = f"{site_base(self)}/login.html"
-        html = f"""<!doctype html>
-<html lang="cs">
-<meta charset="utf-8">
-<title>Účet ověřen</title>
-<meta http-equiv="refresh" content="1;url={login_url}">
-<style>
-  body{{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;padding:24px}}
-  .ok{{display:inline-block;background:#e9f7ef;color:#1e7e34;border:1px solid #c3e6cb;
-       border-radius:8px;padding:10px 12px;margin-bottom:12px}}
-  a.button{{display:inline-block;background:#7c5cff;color:#fff;text-decoration:none;
-       padding:8px 12px;border-radius:8px}}
-</style>
-<h1>Účet ověřen <span class="ok">✅</span></h1>
-<p>Nyní se můžete přihlásit.</p>
-<p><a class="button" href="{login_url}">Pokračovat na přihlášení</a></p>
-<script>setTimeout(function(){{ location.href = "{login_url}"; }}, 1000);</script>
-</html>"""
-        return html_response(self, 200, html)
-
-    return json_response(self, 200, {"ok": True})
+        return json_response(self, 200, {"ok": True})
 
     def handle_auth_login(self):
         length = int(self.headers.get("Content-Length", "0"))
@@ -681,4 +681,5 @@ def run():
 
 if __name__ == "__main__":
     run()
+
 
