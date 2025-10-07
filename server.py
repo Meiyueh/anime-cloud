@@ -95,6 +95,19 @@ def gcs_delete(path: str) -> bool:
 def gcs_list(prefix: str):
     return list(GCS.list_blobs(GCS_BUCKET, prefix=prefix))
 
+def gcs_signed_put_url(path: str, content_type: str, minutes: int = 30) -> str:
+    """
+    Vygeneruj V4 Signed URL pro přímý PUT upload na GCS.
+    """
+    blob = Bucket.blob(path)
+    url = blob.generate_signed_url(
+        version="v4",
+        expiration=_dt.timedelta(minutes=minutes),
+        method="PUT",
+        content_type=content_type or "application/octet-stream",
+    )
+    return url
+
 # ===== Helpers =====
 def now_iso():
     return datetime.datetime.utcnow().replace(microsecond=0).isoformat()+"Z"
@@ -292,6 +305,7 @@ class Handler(SimpleHTTPRequestHandler):
             if parsed.path == "/auth/resend":        return self.handle_resend()
             if parsed.path == "/auth/update_profile":return self.handle_update_profile()
             if parsed.path == "/upload":             return self.handle_upload()
+            if parsed.path == "/upload/sign":         return self.handle_upload_sign()
             if parsed.path == "/feedback":           return self.handle_feedback_save()
             if parsed.path == "/feedback/update":    return self.handle_feedback_update()
             if parsed.path == "/admin/add_anime":    return self.handle_add_anime()
@@ -338,6 +352,44 @@ class Handler(SimpleHTTPRequestHandler):
         except Exception as e: print("[MAIL] send error:", e)
 
         return self._json(200, {"ok":True})
+
+    def handle_upload_sign(self):
+        """
+        Vrátí podepsané PUT URL pro video a volitelně titulky.
+        Frontend pak nahrává přímo na GCS (CORS v bucketu je potřeba mít povolené).
+        """
+        d = self._read_body() or {}
+        anime   = (d.get("anime") or "").strip().lower()
+        episode = int(str(d.get("episode") or "0"))
+        quality = (d.get("quality") or "").strip()
+    
+        video_name = safe_name(d.get("videoName") or "")
+        video_type = d.get("videoType") or "video/mp4"
+        subs_name  = safe_name(d.get("subsName") or "") if d.get("subsName") else None
+        subs_type  = d.get("subsType") or "application/x-subrip"
+    
+        if not anime or not episode or not quality or not video_name:
+            return self._json(400, {"ok": False, "error": "missing_fields"})
+    
+        ep_folder = f"{int(episode):05d}"
+        video_path = f"anime/{anime}/{ep_folder}/{quality}/{video_name}"
+        subs_path  = f"anime/{anime}/{ep_folder}/{quality}/{subs_name}" if subs_name else None
+    
+        try:
+            v_signed = gcs_signed_put_url(video_path, video_type, minutes=60)
+            s_signed = gcs_signed_put_url(subs_path, subs_type, minutes=60) if subs_path else None
+            return self._json(200, {
+                "ok": True,
+                "video": {
+                    "put_url": v_signed,
+                    "public_url": gcs_public_url(video_path),
+                    "content_type": video_type
+                },
+                "subs": ({"put_url": s_signed, "public_url": gcs_public_url(subs_path), "content_type": subs_type} if s_signed else None)
+            })
+        except Exception as e:
+            # Vrátíme čitelnou chybu do FE (aby nepršelo jen 500 bez detailu)
+            return self._json(500, {"ok": False, "error": f"sign_failed: {e.__class__.__name__}: {e}"})
 
     def handle_resend(self):
         d = self._read_body()
@@ -698,4 +750,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
