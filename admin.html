@@ -8,37 +8,19 @@
   <style>
     details>summary{cursor:pointer;list-style:none;user-select:none;padding:8px 12px;border:1px solid var(--border);border-radius:10px;background:var(--panel);margin:8px 0}
     details[open]>summary{background:#191932}
-    .tree{margin-left:16px}
     .small{font-size:.92rem;color:var(--muted)}
     .btn{padding:6px 10px;border-radius:8px;border:1px solid var(--border);background:#0f0f1d;color:var(--text);cursor:pointer}
     .btn.danger{background:var(--err);border-color:#a3211a}
     .btn.inline{margin-left:8px}
-    .pill{display:inline-block;padding:2px 8px;border:1px solid var(--border);border-radius:999px;font-size:.85rem;color:var(--muted)}
-    ul.list-simple{list-style:none;padding-left:0} ul.list-simple li{margin:4px 0}
     .dash-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
     .filters{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px}
     .flex-between{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
-    .tree details{ max-width: 760px; margin-left: auto; }
-
-    /* Tikety layout */
     .tickets .controls{display:flex;align-items:center;gap:8px;}
     .tickets .controls-left{display:flex;align-items:center;gap:8px;justify-content:flex-start;}
     .tickets .controls-right{margin-left:auto;display:flex;align-items:center;}
     .tickets select{width:auto;min-width:160px;text-align-last:left;min-height:36px;}
-
-    /* Přidat anime – větší výška polí a hvězdičky povinných polí */
-    #addAnimePanel input[type="text"],
-    #addAnimePanel input[type="number"],
-    #addAnimePanel select,
-    #addAnimePanel textarea {
-      padding: .65rem .7rem;
-    }
-    .req { color:#c62828; margin-left:4px; font-weight:700; }
-
-    /* Filtry: levá/pravá část */
-    .filters-left{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
-    .filters-right{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-left:auto; }
-    .filters .w-compact-sm{ width:auto !important; min-width:160px; max-width:240px; }
+    #addAnimePanel input, #addAnimePanel select, #addAnimePanel textarea{ padding:.65rem .7rem; }
+    .req{ color:#c62828; margin-left:4px; font-weight:700; }
   </style>
 </head>
 <body>
@@ -59,7 +41,7 @@
     <h1>Administrace</h1>
 
     <div id="guard" class="card" style="display:none">
-      <p>Nemáš oprávnění. Přihlas se jako <code>admin@localanim</code>.</p>
+      <p>Nemáš oprávnění. Přihlas se jako <code>admin</code> (nebo účet s rolí admin).</p>
     </div>
 
     <div id="content" style="display:none">
@@ -67,92 +49,71 @@
 
       <div class="card" id="uploadsCard">
         <div class="flex-between" style="margin-bottom:8px;">
-          <h2>Seznam nahrávek</h2>
+          <h2>Správa</h2>
           <div class="actions-top" style="display:flex;gap:8px;flex-wrap:wrap;">
             <button id="btnAddAnime" class="btn">Přidat anime</button>
-            <button id="btnExport" class="btn">Export JSON</button>
             <button id="btnTickets" class="btn">Tikety</button>
-            <button id="btnClearLocal" class="btn">Vyčistit lokální katalog</button>
-            <button id="btnWipeAll" class="btn danger">Smazat vše</button>
           </div>
         </div>
 
-        <div class="filters" style="margin-bottom:8px;">
-          <div class="filters-left">
-            <input id="fSearch" class="w-compact-sm" type="text" placeholder="Hledat anime." />
-            <select id="fUser" class="w-compact-sm"><option value="">— uživatel —</option></select>
-            <select id="fQual" class="w-compact-sm">
-              <option value="">— kvalita —</option><option>480p</option><option>720p</option><option>1080p</option><option>2160p</option>
-            </select>
-          </div>
+        <!-- Panel: Přidat anime -->
+        <div id="addAnimePanel" class="card" style="display:none; margin-top:12px;">
+          <div class="flex-between"><h2>Přidat / upravit anime</h2><button id="btnCloseAddAnime" class="btn">Zavřít</button></div>
+          <form id="addAnimeForm" class="grid" style="grid-template-columns:1fr 1fr; gap:12px;">
+            <div class="row">
+              <label>Slug <span class="req">*</span></label>
+              <input id="anSlug" type="text" required placeholder="např. bleach">
+            </div>
+            <div class="row">
+              <label>Název <span class="req">*</span></label>
+              <input id="anTitle" type="text" required placeholder="např. Bleach">
+            </div>
+            <div class="row">
+              <label>Počet dílů <span class="req">*</span></label>
+              <input id="anEpisodes" type="number" min="1" required placeholder="např. 366">
+            </div>
+            <div class="row">
+              <label>Rok <span class="req">*</span></label>
+              <input id="anYear" type="number" min="1900" max="2100" required placeholder="např. 2004">
+            </div>
+            <div class="row" style="grid-column:1 / -1;">
+              <label>Žánry (čárkou) <span class="req">*</span></label>
+              <input id="anGenres" type="text" required placeholder="např. Action, Shounen">
+            </div>
+            <div class="row" style="grid-column:1 / -1;">
+              <label>Popis <span class="req">*</span></label>
+              <textarea id="anDesc" rows="4" required placeholder="Krátký popis..."></textarea>
+            </div>
+            <div class="row">
+              <label>Cover (obrázek) <span class="req">*</span></label>
+              <input id="anCoverFile" type="file" accept="image/*" required>
+              <small class="muted">Doporučeno ~ 600×900.</small>
+              <img id="anCoverPreview" alt="" style="display:none; max-width:160px; border-radius:8px; margin-top:6px; border:1px solid var(--border);">
+            </div>
+            <div class="row">
+              <label>Studio <span class="req">*</span></label>
+              <input id="anStudio" type="text" required>
+            </div>
+            <div class="row">
+              <label>Status <span class="req">*</span></label>
+              <select id="anStatus" required>
+                <option value="ongoing">ongoing</option>
+                <option value="completed">completed</option>
+                <option value="hiatus">hiatus</option>
+              </select>
+            </div>
+            <div class="row" style="grid-column:1 / -1; display:flex; justify-content:flex-end;">
+              <button type="submit" class="btn">Uložit</button>
+            </div>
+            <p id="addAnimeMsg" class="msg" style="grid-column:1 / -1;"></p>
+          </form>
         </div>
 
-        <div id="treeWrap" class="tree"></div>
-      </div>
-
-      <!-- Panel: Přidat anime -->
-      <div id="addAnimePanel" class="card" style="display:none; margin-top:12px;">
-        <div class="flex-between"><h2>Přidat anime</h2><button id="btnCloseAddAnime" class="btn">Zavřít</button></div>
-        <form id="addAnimeForm" class="grid" style="grid-template-columns:1fr 1fr; gap:12px;">
-          <div class="row">
-            <label>Slug <span class="req">*</span></label>
-            <input id="anSlug" type="text" required placeholder="např. bleach">
-          </div>
-          <div class="row">
-            <label>Název <span class="req">*</span></label>
-            <input id="anTitle" type="text" required placeholder="např. Bleach">
-          </div>
-          <div class="row">
-            <label>Počet dílů <span class="req">*</span></label>
-            <input id="anEpisodes" class="tall" type="number" min="1" required placeholder="např. 366">
-          </div>
-          <div class="row">
-            <label>Rok <span class="req">*</span></label>
-            <input id="anYear" class="tall" type="number" min="1900" max="2100" required placeholder="např. 2004">
-          </div>
-
-          <div class="row" style="grid-column:1 / -1;">
-            <label>Žánry (čárkou) <span class="req">*</span></label>
-            <input id="anGenres" type="text" required placeholder="např. Action, Shounen">
-          </div>
-
-          <div class="row" style="grid-column:1 / -1;">
-            <label>Popis <span class="req">*</span></label>
-            <textarea id="anDesc" rows="4" required placeholder="např. Ichigo Kurosaki získá sílu Shinigami..."></textarea>
-          </div>
-
-          <div class="row">
-            <label>Cover (obrázek) <span class="req">*</span></label>
-            <input id="anCoverFile" type="file" accept="image/*" required>
-            <small class="muted">Nahraj obrázek coveru (doporučeno ~ 600×900).</small>
-            <img id="anCoverPreview" alt="" style="display:none; max-width:160px; border-radius:8px; margin-top:6px; border:1px solid var(--border);">
-          </div>
-
-          <div class="row">
-            <label>Studio <span class="req">*</span></label>
-            <input id="anStudio" type="text" required placeholder="např. Studio Pierrot">
-          </div>
-
-          <div class="row">
-            <label>Status <span class="req">*</span></label>
-            <select id="anStatus" required>
-              <option value="ongoing">ongoing</option>
-              <option value="completed">completed</option>
-              <option value="hiatus">hiatus</option>
-            </select>
-          </div>
-
-          <div class="row" style="grid-column:1 / -1; display:flex; justify-content:flex-end;">
-            <button type="submit" class="btn">Uložit</button>
-          </div>
-          <p id="addAnimeMsg" class="msg" style="grid-column:1 / -1;"></p>
-        </form>
-      </div>
-
-      <!-- Panel: Tikety -->
-      <div id="ticketsPanel" class="card tickets" style="display:none">
-        <div class="flex-between"><h2>Tikety uživatelů</h2><button id="btnCloseTickets" class="btn">Zavřít</button></div>
-        <div id="ticketsList"></div>
+        <!-- Panel: Tikety -->
+        <div id="ticketsPanel" class="card tickets" style="display:none">
+          <div class="flex-between"><h2>Tikety uživatelů</h2><button id="btnCloseTickets" class="btn">Zavřít</button></div>
+          <div id="ticketsList"></div>
+        </div>
       </div>
     </div>
   </main>
@@ -163,217 +124,36 @@
   <script>
     window.CLOUD_BASE = "https://storage.googleapis.com/anime-cloud";
     App.initNavbar();
-    if (!App.isAdmin()){
+    if (App.auth().role !== 'admin'){
       document.getElementById('guard').style.display='block';
     } else {
       document.getElementById('content').style.display='block';
       initAdmin();
     }
 
-    function initAdmin(){
-      let uploadsAll = App.getUploads().slice().sort((a,b)=>b.ts-a.ts);
-      const usersMap = JSON.parse(localStorage.getItem('animecloud_users')||'{ }');
+    async function initAdmin(){
+      // DASH z /stats
+      try{
+        const r = await fetch(App.api('/stats'), { cache:'no-cache' });
+        const s = await r.json();
+        const dash = document.getElementById('dash');
+        if (s && s.ok){
+          dash.innerHTML = `
+            <h2>Dashboard</h2>
+            <div class="dash-grid">
+              <div class="card"><strong>Ověření uživatelé</strong><div class="muted">${s.users_verified}</div></div>
+              <div class="card"><strong>Celkem uploadů</strong><div class="muted">${s.uploads_total}</div></div>
+              <div class="card"><strong>Nejaktivnější anime</strong><div class="muted">${s.top_anime?.slug || '—'} (${s.top_anime?.episodes_with_uploads||0} dílů)</div></div>
+            </div>`;
+        }
+      } catch {}
 
-      // DASH (lokální + GCS)
-      const dash = document.getElementById('dash');
-      const perUser = {};
-      uploadsAll.forEach(u => { perUser[u.user]=(perUser[u.user]||0)+1; });
-      const topUser = Object.entries(perUser).sort((a,b)=>b[1]-a[1])[0];
-      dash.innerHTML = `
-        <h2>Dashboard</h2>
-        <div class="dash-grid">
-          <div class="card"><strong>Počet uživatelů (lokál)</strong><div class="muted">${Object.keys(usersMap).length}</div></div>
-          <div class="card"><strong>Celkem uploadů (lokál)</strong><div class="muted">${uploadsAll.length}</div></div>
-          <div class="card"><strong>Top uploader (lokál)</strong><div class="muted">${topUser?`${topUser[0]} (${topUser[1]})`:'—'}</div></div>
-        </div>`;
-
-      // GCS statistiky (globální)
-      (async () => {
-        try {
-          const r = await fetch(App.api('/stats'));
-          const s = await r.json();
-          if (s?.ok) {
-            const host = document.getElementById('dash');
-            const gcsHtml = `
-              <div class="dash-grid" style="margin-top:8px">
-                <div class="card"><strong>Registrovaní (GCS)</strong><div class="muted">${s.users}</div></div>
-                <div class="card"><strong>Celkem uploadů (GCS)</strong><div class="muted">${s.uploads}</div></div>
-                <div class="card"><strong>Top anime (GCS)</strong><div class="muted">${s.top_anime ? (s.top_anime.slug + ' — ' + s.top_anime.episodes + ' dílů') : '—'}</div></div>
-              </div>`;
-            host.insertAdjacentHTML('beforeend', gcsHtml);
-          }
-        } catch {}
-      })();
-
-      // FILTRY + STROM (lokálně z LS)
-      const fSearch = document.getElementById('fSearch');
-      const fUser   = document.getElementById('fUser');
-      const fQual   = document.getElementById('fQual');
-      const treeWrap= document.getElementById('treeWrap');
-      const uniqueUsers = [...new Set(uploadsAll.map(u=>u.user))].sort();
-      fUser.innerHTML = `<option value="">— uživatel —</option>` + uniqueUsers.map(u=>`<option>${u}</option>`).join('');
-
-      function grouped(list){
-        const map={};
-        list.forEach((u,i)=>{
-          const s=u.slug, e=String(u.episode), q=u.quality;
-          if(!map[s]) map[s]={};
-          if(!map[s][e]) map[s][e]={};
-          if(!map[s][e][q]) map[s][e][q]=[];
-          map[s][e][q].push({...u,_idx:i});
-        });
-        return map;
-      }
-      function buildTree(list){
-        const g = grouped(list);
-        const slugs = Object.keys(g).sort(); if(!slugs.length) return '<p class="muted">Žádná data.</p>';
-        return slugs.map(slug=>{
-          const eps = g[slug];
-          const epHtml = Object.keys(eps).sort((a,b)=>Number(a)-Number(b)).map(ep=>{
-            const quals = eps[ep];
-            const qualHtml = ['480p','720p','1080p','2160p'].map(q=>{
-              const arr = (quals[q]||[]).slice().sort((x,y)=>y.ts-x.ts);
-              const files = arr.map(u=>`
-                <li>
-                  <span class="code">${u.videoName}</span>
-                  ${u.subsName?`&nbsp;<span class="small">[${u.subsName}]</span>`:''}
-                  &nbsp;<span class="small">(${new Date(u.ts).toLocaleString()})</span>
-                  <button class="btn danger inline" data-del data-slug="${u.slug}" data-ep="${u.episode}" data-q="${u.quality}" data-name="${u.videoName}">Smazat</button>
-                </li>`).join('');
-              return `<details><summary>${q==='2160p'?'4K (2160p)':q} <span class="small">(${arr.length}/3)</span></summary><ul class="list-simple tree">${files||'<li class="small">Žádná data</li>'}</ul></details>`;
-            }).join('');
-            return `<details><summary>Díl ${ep}</summary><div class="tree">${qualHtml}</div></details>`;
-          }).join('');
-          return `<details><summary>${slug}</summary><div class="tree">${epHtml||'<p class="small">Žádné díly</p>'}</div></details>`;
-        }).join('');
-      }
-      function applyFilters(){
-        uploadsAll = App.getUploads().slice().sort((a,b)=>b.ts-a.ts);
-        let arr = uploadsAll.slice();
-        const q = (fSearch.value||'').toLowerCase();
-        const u = fUser.value; const qual=fQual.value;
-        if(q) arr=arr.filter(x=>x.slug.toLowerCase().includes(q));
-        if(u) arr=arr.filter(x=>x.user===u);
-        if(qual) arr=arr.filter(x=>x.quality===qual);
-        treeWrap.innerHTML = buildTree(arr);
-        wireDeleteButtons();
-      }
-      [fSearch,fUser,fQual].forEach(el=>el.addEventListener('input',applyFilters));
-      applyFilters();
-
-      function wireDeleteButtons(){
-        treeWrap.querySelectorAll('[data-del]').forEach(btn=>{
-          btn.addEventListener('click', async ()=>{
-            const slug=btn.dataset.slug, ep=Number(btn.dataset.ep), q=btn.dataset.q, name=btn.dataset.name;
-            if (!confirm(`Smazat ${name}?`)) return;
-            try{
-              const r = await fetch(App.api('/delete'),{
-                method:'DELETE',
-                headers:{'Content-Type':'application/json'},
-                body:JSON.stringify({anime:slug,episode:ep,quality:q,videoName:name})
-              });
-              if(!r.ok) App.toast('Soubor v GCS se nepodařilo smazat','error');
-            }catch{ App.toast('Chyba připojení','error'); }
-            // Lokálně smaž záznam a přerenderuj bez reloadu
-            const ls = App.getUploads();
-            const idx = ls.findIndex(u=>u.slug===slug&&u.episode===ep&&u.quality===q&&u.videoName===name);
-            if(idx>=0){ ls.splice(idx,1); App.setUploads(ls); }
-            App.toast('Záznam smazán (lokál)','ok');
-            // zachovej otevřené větve
-            const openKeys = Array.from(document.querySelectorAll('#treeWrap details[open] > summary'))
-              .map(s => s.textContent.trim());
-            applyFilters();
-            openKeys.forEach(key=>{
-              const s = Array.from(document.querySelectorAll('#treeWrap details > summary'))
-                .find(x => x.textContent.trim() === key);
-              if (s) s.parentElement.setAttribute('open','');
-            });
-          });
-        });
-      }
-
-      // Export lokálního logu
-      document.getElementById('btnExport').addEventListener('click', ()=>{
-        const data = JSON.stringify(App.getUploads(), null, 2);
-        const blob = new Blob([data], {type:'application/json'});
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a'); a.href=url; a.download='uploads_export.json'; a.click();
-        URL.revokeObjectURL(url);
-      });
-
-      // Lokální čistka custom katalogu
-      document.getElementById('btnClearLocal').addEventListener('click', ()=>{
-        if (!confirm('Smazat lokální doplňkový katalog (animecloud_custom_anime)?')) return;
-        localStorage.removeItem('animecloud_custom_anime');
-        App.toast('Lokální katalog vyčištěn','ok');
-      });
-
-      // Tikety (thread)
-      const ticketsPanel = document.getElementById('ticketsPanel');
-      document.getElementById('btnTickets').addEventListener('click', ()=>{ ticketsPanel.style.display='block'; renderTickets(); });
-      document.getElementById('btnCloseTickets').addEventListener('click', ()=>ticketsPanel.style.display='none');
-
-      function renderTickets(){
-        const opened = new Set(
-          Array.from(document.querySelectorAll('#ticketsList details[open]')).map(d=>d.dataset.id)
-        );
-        const list = App.getFeedback().slice().sort((a,b)=>b.ts-a.ts);
-        const wrap = document.getElementById('ticketsList');
-        if (!list.length){ wrap.innerHTML = '<p class="muted">Žádné tikety.</p>'; return; }
-        wrap.innerHTML = list.map(t => `
-          <div class="ticket-card">
-            <details data-id="${t.id}" ${opened.has(t.id)?'open':''}>
-              <summary>[${t.category||'—'}] ${new Date(t.ts).toLocaleString()} — ${t.user||t.name||'anonym'} ${t.priority?('• '+t.priority):''} — <span class="small">${t.status||'open'}</span></summary>
-              <div class="thread">
-                ${ (t.messages||[]).map(m => `
-                  <div class="msgRow ${m.role==='admin'?'admin':''}">
-                    <div>
-                      <div class="bubble">${(m.text||'').replace(/</g,'&lt;')}</div>
-                      <div class="meta">${m.author||m.role} • ${new Date(m.ts).toLocaleString()}</div>
-                    </div>
-                  </div>`).join('') }
-              </div>
-              <div class="row controls">
-                <div class="controls-left">
-                  <select id="st_${t.id}">
-                    ${['open','approved','rejected','resolved'].map(s=>`<option value="${s}" ${(t.status||'open')===s?'selected':''}>${s}</option>`).join('')}
-                  </select>
-                </div>
-                <div class="controls-right">
-                  <button class="btn" data-save="${t.id}">Odeslat</button>
-                </div>
-              </div>
-            </details>
-          </div>
-        `).join('');
-
-        wrap.querySelectorAll('[data-save]').forEach(b=>{
-          b.addEventListener('click', ()=>{
-            const id = b.getAttribute('data-save');
-            const st = document.getElementById('st_'+id).value;
-            App.updateFeedback(id, { status: st });
-            App.toast('Ticket uložen','ok');
-            renderTickets();
-          });
-        });
-      }
-
-      // WIPE uploads (placeholder)
-      document.getElementById('btnWipeAll').addEventListener('click', async ()=>{
-        const pass = prompt('Zadej heslo pro smazání VŠECH souborů (nevratné):');
-        if (!pass) return;
-        try{
-          const r = await fetch(App.api('/wipe_all'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:pass})});
-          if (r.ok){ App.setUploads([]); App.toast('Smazáno na serveru i lokálně','ok'); location.reload(); }
-          else App.toast('Špatné heslo nebo chyba serveru','error');
-        }catch{ App.toast('Chyba připojení','error'); }
-      });
-
-      // Panel Přidat anime
+      // Ovládání panelů
       const addPanel = document.getElementById('addAnimePanel');
       document.getElementById('btnAddAnime').addEventListener('click', ()=> addPanel.style.display='block');
       document.getElementById('btnCloseAddAnime').addEventListener('click', ()=> addPanel.style.display='none');
 
+      // Uložení nového anime
       document.getElementById('addAnimeForm').addEventListener('submit', async e=>{
         e.preventDefault();
         const slug  = document.getElementById('anSlug').value.trim().toLowerCase();
@@ -391,42 +171,100 @@
           return App.showMsg(msgEl,'Vyplň všechna pole.','error');
         }
 
-        // data URL z coveru
+        // 1) cover -> data URL
         const cover = await new Promise((resolve,reject)=>{
-          const r = new FileReader(); r.onload = ()=>resolve(r.result); r.onerror = reject; r.readAsDataURL(coverFile);
+          const r = new FileReader();
+          r.onload = ()=>resolve(r.result);
+          r.onerror = reject;
+          r.readAsDataURL(coverFile);
         });
 
         try{
-          const resp = await App.apiFetch('/admin/add_anime', {
-            method: 'POST',
-            headers: { 'Content-Type':'application/json' },
+          const resp = await fetch(App.api('/admin/add_anime'), {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
             body: JSON.stringify({ slug, title, episodes, genres, description, cover, status, year, studio })
           });
-          if (!resp.ok){
-            const tt = await resp.text().catch(()=> '');
-            return App.showMsg(msgEl, '⚠️ Nepodařilo se zapsat do anime.json: ' + (tt||resp.status), 'error');
+          const payload = await resp.json().catch(()=> ({}));
+          if (!resp.ok || !payload?.ok){
+            return App.showMsg(msgEl, '⚠️ Nepodařilo se zapsat do anime.json.', 'error');
           }
-          const payload = await resp.json();
-          if (payload?.ok){
-            App.toast('anime.json publikován do GCS','ok');
-          } else {
-            App.toast('Uloženo, ale nepodařilo se publikovat do GCS','error');
-          }
+          // náhled a potvrzení
+          const prev = document.getElementById('anCoverPreview');
+          prev.src = cover; prev.style.display = 'block';
+          App.showMsg(msgEl,'✅ Uloženo a publikováno do anime.json.','ok');
         } catch(err){
           return App.showMsg(msgEl,'⚠️ Chyba spojení při zápisu do anime.json.','error');
         }
-
-        // lokální offline doplněk
-        const storeKey = 'animecloud_custom_anime';
-        const list = (JSON.parse(localStorage.getItem(storeKey) || '[]') || []).filter(a=>a.slug!==slug);
-        list.push({slug,title,episodes,genres,description,cover,status,year,studio});
-        localStorage.setItem(storeKey, JSON.stringify(list));
-
-        // náhled coveru a zpráva
-        const prev = document.getElementById('anCoverPreview');
-        prev.src = cover; prev.style.display = 'block';
-        App.showMsg(msgEl,'✅ Uloženo a zapsáno do anime.json.','ok');
       });
+
+      // Tikety
+      const ticketsPanel = document.getElementById('ticketsPanel');
+      document.getElementById('btnTickets').addEventListener('click', ()=>{ ticketsPanel.style.display='block'; renderTickets(); });
+      document.getElementById('btnCloseTickets').addEventListener('click', ()=>ticketsPanel.style.display='none');
+
+      async function loadTickets(){
+        try{
+          const r = await fetch(App.api('/feedback/list'), { cache:'no-cache' });
+          const p = await r.json();
+          return (p && p.ok) ? (p.items || []) : [];
+        } catch { return []; }
+      }
+
+      async function renderTickets(){
+        const list = await loadTickets();
+        const wrap = document.getElementById('ticketsList');
+        if (!list.length){ wrap.innerHTML = '<p class="muted">Žádné tikety.</p>'; return; }
+
+        wrap.innerHTML = list.map(t => `
+          <div class="ticket-card">
+            <details data-id="${t.id}">
+              <summary>[${t.category||'—'}] ${new Date(t.ts||0).toLocaleString()} — ${t.user||t.name||'anonym'} ${t.priority?('• '+t.priority):''} — <span class="small">${t.status||'open'}</span></summary>
+              <div class="thread">
+                ${(t.messages||[]).map(m => `
+                  <div class="msgRow ${m.role==='admin'?'admin':''}">
+                    <div>
+                      <div class="bubble">${(m.text||'').replace(/</g,'&lt;')}</div>
+                      <div class="meta">${m.author||m.role} • ${new Date(m.ts||0).toLocaleString()}</div>
+                    </div>
+                  </div>`).join('')}
+              </div>
+              <div class="row" style="margin-top:.6rem;">
+                <label>Odpověď admina</label>
+                <textarea id="reply_${t.id}" rows="3" placeholder="Napiš odpověď..." ${['resolved','approved','rejected'].includes(t.status)?'disabled':''}></textarea>
+              </div>
+              <div class="row controls">
+                <div class="controls-left">
+                  <select id="st_${t.id}">
+                    ${['open','approved','rejected','resolved'].map(s=>`<option value="${s}" ${(t.status||'open')===s?'selected':''}>${s}</option>`).join('')}
+                  </select>
+                </div>
+                <div class="controls-right">
+                  <button class="btn" data-save="${t.id}">Odeslat</button>
+                </div>
+              </div>
+            </details>
+          </div>
+        `).join('');
+
+        wrap.querySelectorAll('[data-save]').forEach(b=>{
+          b.addEventListener('click', async ()=>{
+            const id = b.getAttribute('data-save');
+            const reply = (document.getElementById('reply_'+id).value||'').trim();
+            const st = document.getElementById('st_'+id).value;
+            try{
+              if (reply){
+                await fetch(App.api('/feedback/reply'), { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ id, role:'admin', author: App.auth().email, text: reply }) });
+              }
+              await fetch(App.api('/feedback/update'), { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ id, status: st }) });
+              App.toast('Ticket uložen','ok');
+              renderTickets();
+            } catch {
+              App.toast('Chyba při ukládání','error');
+            }
+          });
+        });
+      }
     }
   </script>
 </body>
