@@ -6,32 +6,20 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="stylesheet" href="styles/main.css" />
   <style>
-    /* velký cover 190×570 */
     .cover-tall{width:190px;height:570px;object-fit:cover;object-position:center;border-radius:12px;background:var(--border);display:block;margin:0 auto;}
     .anime-card{display:flex;flex-direction:column;align-items:center;gap:.6rem;text-align:center;padding:.8rem;cursor:pointer;text-decoration:none;color:inherit}
     .anime-title{font-weight:600;}
     .anime-meta{color:var(--muted);font-size:.95rem;}
-
-    /* hlavička sekce */
     .row-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:24px;}
     .actions{display:flex;align-items:center;gap:8px}
     .search{display:none}
     .search input{min-width:260px;background:#12122b;color:var(--text);border:1px solid var(--border);border-radius:8px;padding:.45rem .6rem}
     :root[data-theme="light"] .search input{background:#fff}
-
-    /* grid pro obálky – min 190px */
     #anime-grid{grid-template-columns:repeat(auto-fill,minmax(190px,1fr))}
-
-    /* pager */
     .pager{display:flex;align-items:center;justify-content:center;gap:10px;margin-top:12px}
     .pager button{min-width:42px}
     .pager .page-num{min-width:36px;text-align:center}
     .center-row{display:flex;justify-content:center;margin-top:12px}
-
-    @media (max-width:700px){
-      .row-head{ margin-bottom:16px; }
-    }
-
     .anime-card:hover { transform: translateY(-4px); box-shadow: 0 6px 16px rgba(0,0,0,0.25); }
     .anime-card img { transition: transform .3s; }
     .anime-card:hover img { transform: scale(1.03); }
@@ -39,9 +27,7 @@
 </head>
 <body>
   <header class="site-header">
-    <a href="index.html" class="brand">
-      <img src="assets/logo.svg" alt="AnimeCloud" />
-    </a>
+    <a href="index.html" class="brand"><img src="assets/logo.svg" alt="AnimeCloud" /></a>
     <nav class="top-nav">
       <a href="index.html" aria-current="page">Info</a>
       <a href="upload.html" id="nav-upload" class="hidden">Upload</a>
@@ -60,7 +46,7 @@
       <h2>Statistiky</h2>
       <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(180px,1fr)); gap: 12px;">
         <div class="card"><strong>Počet anime</strong><div id="stat-anime" class="muted">–</div></div>
-        <div class="card"><strong>Registrovaní uživatelé</strong><div id="stat-users" class="muted">–</div></div>
+        <div class="card"><strong>Registrovaní uživatelé (ověření)</strong><div id="stat-users" class="muted">–</div></div>
         <div class="card"><strong>Celkem uploadů</strong><div id="stat-uploads" class="muted">–</div></div>
         <div class="card"><strong>Nejaktivnější anime</strong><div id="stat-top-anime" class="muted">–</div></div>
       </div>
@@ -78,12 +64,10 @@
 
       <div id="anime-grid" class="grid anime"></div>
 
-      <!-- tlačítko pod úvodní čtveřicí -->
       <div id="teaserMoreRow" class="center-row">
         <button id="btnTeaserMore">Zobrazit další</button>
       </div>
 
-      <!-- stránkování dole -->
       <div id="pager" class="pager hidden">
         <button id="btnPrev" aria-label="Předchozí">‹</button>
         <span id="pageNum" class="page-num">1</span>
@@ -99,54 +83,36 @@
     window.CLOUD_BASE = "https://storage.googleapis.com/anime-cloud";
     App.initNavbar();
 
-    // --- helpery ---
     const strip = (s)=> (s||'').toString().normalize('NFD').replace(/\p{Diacritic}/gu,'').toLowerCase();
-    const debounce = (fn,ms)=>{let t;return (...a)=>{clearTimeout(t);t=setTimeout(()=>fn(...a),ms)}};
+    const debounce = (fn,ms)=>{let t;return(...a)=>{clearTimeout(t);t=setTimeout(()=>fn(...a),ms)}};
 
     (async function(){
-      // 1) katalog z GCS
+      // anime.json (počet anime + katalog)
       const anime = await App.fetchAnime(`${window.CLOUD_BASE}/data/anime.json`);
-      document.getElementById('stat-anime').textContent = String(anime.length);
 
-      // 2) globální statistiky z našeho serveru (/stats)
+      // /stats (uživatelé ověření, uploady a nejaktivnější slug)
+      let stats = { users_verified: 0, uploads_total: 0, top_anime: {slug:null, episodes_with_uploads:0} };
       try {
-        const r = await fetch(App.api('/stats'));
-        const s = await r.json();
-        if (s?.ok) {
-          document.getElementById('stat-users').textContent   = String(s.users);
-          document.getElementById('stat-uploads').textContent = String(s.uploads);
-          const top = s.top_anime;
-          document.getElementById('stat-top-anime').textContent = top ? `${top.slug} — ${top.episodes} dílů` : '—';
-        } else {
-          // fallback na lokál
-          const users = JSON.parse(localStorage.getItem('animecloud_users') || '{}');
-          document.getElementById('stat-users').textContent   = String(Object.keys(users).length);
-          document.getElementById('stat-uploads').textContent = String(App.getUploads().length);
-          document.getElementById('stat-top-anime').textContent = '—';
-        }
-      } catch {
-        const users = JSON.parse(localStorage.getItem('animecloud_users') || '{}');
-        document.getElementById('stat-users').textContent   = String(Object.keys(users).length);
-        document.getElementById('stat-uploads').textContent = String(App.getUploads().length);
-        document.getElementById('stat-top-anime').textContent = '—';
+        const r = await fetch(App.api('/stats'), { cache:'no-cache' });
+        const p = await r.json(); if (p && p.ok) stats = p;
+      } catch {}
+
+      // STATISTIKY
+      document.getElementById('stat-anime').textContent   = String(anime.length);
+      document.getElementById('stat-users').textContent   = String(stats.users_verified || 0);
+      document.getElementById('stat-uploads').textContent = String(stats.uploads_total || 0);
+
+      // najdi název top anime dle slug
+      let topText = '—';
+      if (stats.top_anime && stats.top_anime.slug){
+        const found = anime.find(a => a.slug === stats.top_anime.slug);
+        const title = found ? found.title : stats.top_anime.slug;
+        topText = `${title} — ${stats.top_anime.episodes_with_uploads} dílů s uploadem`;
       }
+      document.getElementById('stat-top-anime').textContent = topText;
 
-      // --- zbytek: grid seřazený lehce podle lokálních uploadů (pro UX),
-      // globální top se bere výše ze /stats
-      const uploads = App.getUploads();
-      const uniqKey = {}; uploads.forEach(u => { uniqKey[`${u.slug}#${u.episode}`] = 1; });
-      const uploadedPerAnime = {};
-      Object.keys(uniqKey).forEach(k => {
-        const slug = k.split('#')[0];
-        uploadedPerAnime[slug] = (uploadedPerAnime[slug] || 0) + 1;
-      });
-
-      const sorted = anime.slice().sort((a,b)=>{
-        const ca = uploadedPerAnime[a.slug] || 0;
-        const cb = uploadedPerAnime[b.slug] || 0;
-        if (cb !== ca) return cb - ca;
-        return a.title.localeCompare(b.title, 'cs');
-      });
+      // seřadíme anime… (stejně jako dřív – klidně jednoduché podle názvu)
+      const sorted = anime.slice().sort((a,b)=> a.title.localeCompare(b.title, 'cs'));
 
       // DOM refs
       const grid = document.getElementById('anime-grid');
@@ -159,16 +125,12 @@
       const searchWrap = document.getElementById('searchWrap');
       const searchInput = document.getElementById('searchInput');
 
-      // STAV
-      let mode = 'teaser'; // 'teaser' | 'paged'
+      let mode = 'teaser';
       const pageSize = 20;
       let page = 1;
-      let filtered = sorted.slice(); // pro search
+      let filtered = sorted.slice();
 
       function cardHTML(a){
-        const x = uploadedPerAnime[a.slug] || 0;
-        const y = a.episodes;
-
         const coverSrc = (() => {
           const c = a.cover || '';
           if (/^https?:\/\//.test(c)) return c;
@@ -176,12 +138,12 @@
           if (!c) return 'assets/logo.svg';
           return c;
         })();
-
+        // Prosté info – nepočítáme lokální uploady, protože nyní bere statistiky server
         return `
           <a href="#" class="card anime-card" data-slug="${a.slug}">
             <img class="cover-tall" loading="lazy" src="${coverSrc}" alt="${a.title}" onerror="this.src='assets/logo.svg'">
             <div class="anime-title">${a.title}</div>
-            <div class="anime-meta">${x}/${y} dílů nahráno</div>
+            <div class="anime-meta">${a.episodes} dílů</div>
           </a>
         `;
       }
@@ -207,6 +169,7 @@
         pageNum.textContent = String(page);
         btnPrev.disabled = (page <= 1);
         btnNext.disabled = (page >= totalPages());
+        searchWrap.style.display = 'block';
         attachCardClicks();
       }
 
@@ -225,13 +188,7 @@
 
       renderTeaser();
 
-      btnTeaserMore.addEventListener('click', ()=>{
-        mode = 'paged';
-        page = 1;
-        searchWrap.style.display = 'block';
-        renderPaged();
-      });
-
+      btnTeaserMore.addEventListener('click', ()=>{ mode='paged'; page=1; renderPaged(); });
       btnPrev.addEventListener('click', ()=>{ if (page>1){ page--; renderPaged(); }});
       btnNext.addEventListener('click', ()=>{ if (page<totalPages()){ page++; renderPaged(); }});
 
@@ -243,10 +200,7 @@
           return hay.includes(q);
         });
         page = 1;
-        if (mode === 'teaser'){
-          mode = 'paged';
-          searchWrap.style.display='block';
-        }
+        if (mode === 'teaser'){ mode='paged'; }
         renderPaged();
       }, 200);
       searchInput.addEventListener('input', onSearch);
