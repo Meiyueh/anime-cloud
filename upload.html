@@ -16,15 +16,11 @@
     @media (max-width: 700px) { .row-files { grid-template-columns: 1fr; } }
     .field { display:flex; flex-direction:column; gap:6px; }
     .file-info{font-size:.9rem;color:var(--muted)}
-    #rowAnime, #rowEp, #rowQ {
-      display: flex; flex-direction: column; align-items: flex-start; gap: 6px;
-    }
+    #rowAnime, #rowEp, #rowQ { display:flex; flex-direction:column; align-items:flex-start; gap:6px; }
     #panel .row.compact.align-left{ gap: 6px; }
     #panel .row.compact.align-left > div{ margin-top: 0 !important; }
     #panel select { width: 320px !important; text-align-last: left; }
     @media (max-width:560px){ #panel select{ width:100% !important; max-width:none; } }
-    .file-mini-progress{height:6px;background:#0f0f1d;border:1px solid var(--border);border-radius:999px;overflow:hidden}
-    .file-mini-progress>div{height:100%;width:0%;background:linear-gradient(90deg,#7c5cff,#35c759,#7c5cff);background-size:200% 100%;animation:slide 2s linear infinite;transition:width .12s}
   </style>
 </head>
 <body>
@@ -53,19 +49,25 @@
         <!-- Vyber anime -->
         <div class="row compact align-left" id="rowAnime">
           <label for="selAnime">Vyber anime</label>
-          <div><select id="selAnime" class="w-compact"></select></div>
+          <div>
+            <select id="selAnime" class="w-compact"></select>
+          </div>
         </div>
 
         <!-- Vyber díl -->
         <div class="row compact align-left" id="rowEp" style="display:none">
           <label for="selEp">Vyber díl</label>
-          <div><select id="selEp" class="w-compact"></select></div>
+          <div>
+            <select id="selEp" class="w-compact"></select>
+          </div>
         </div>
 
         <!-- Vyber kvalitu -->
         <div class="row compact align-left" id="rowQ" style="display:none">
           <label for="selQ">Vyber kvalitu</label>
-          <div><select id="selQ" class="w-compact"></select></div>
+          <div>
+            <select id="selQ" class="w-compact"></select>
+          </div>
         </div>
 
         <div class="row row-files" id="rowFiles" style="display:none">
@@ -227,48 +229,28 @@
       form.append('videoName', videoOut);
       if (s){ form.append('subs', s); form.append('subsName', subsOut); }
 
-      // celkový progress
       overall.classList.remove('hidden');
       barOverall.style.width='0%'; pctOverall.textContent='0%';
       miniPV.style.width='0%'; miniPS.style.width='0%';
-
-      // odhad pro rozdělení mezi video/subs (v jednom requestu)
-      const totalSize = v.size + (s ? s.size : 0);
-      const videoFrac = totalSize ? (v.size / totalSize) : 1;
 
       try {
         const xhr = new XMLHttpRequest();
         xhr.open('POST', App.api('/upload'));
         xhr.responseType = 'json';
-
-        xhr.upload.onprogress = (e)=>{
-          if (!e.lengthComputable) return;
-          const frac = e.loaded / e.total;               // 0..1 celého požadavku
-          const pct  = Math.max(0, Math.min(100, Math.round(frac*100)));
-          barOverall.style.width = pct + '%';
-          pctOverall.textContent = pct + '%';
-
-          // mini progress: nejdřív video, pak subs (podle poměru velikostí)
-          const vf = Math.max(0, Math.min(1, frac / (videoFrac || 1)));
-          miniPV.style.width = Math.round(vf * 100) + '%';
-          if (s){
-            const sf = frac <= videoFrac ? 0 : Math.max(0, Math.min(1, (frac - videoFrac) / (1 - videoFrac)));
-            miniPS.style.width = Math.round(sf * 100) + '%';
-          }
-        };
-
-        xhr.onerror = ()=>{ App.showMsg(msg, '❌ Chyba připojení.', 'error'); overall.classList.add('hidden'); };
-        xhr.onload = ()=>{
-          const ok = (xhr.status === 200);
-          let payload = xhr.response;
-          if (!payload){
-            try { payload = JSON.parse(xhr.responseText || '{}'); } catch { payload = null; }
+        xhr.upload.onprogress = (e)=>{ if (e.lengthComputable){ const p = Math.round(e.loaded/e.total*100); barOverall.style.width=p+'%'; pctOverall.textContent=p+'%'; miniPV.style.width=p+'%'; if (s) miniPS.style.width=p+'%'; } };
+        xhr.onload = ()=> {
+          let ok = false, err = null, payload = xhr.response;
+          if (xhr.status === 200 && payload && payload.ok) {
+            ok = true;
+          } else {
+            try { if (!payload) payload = JSON.parse(xhr.responseText||'{}'); } catch {}
+            err = (payload && payload.error) ? payload.error : `HTTP ${xhr.status}`;
           }
 
-          if (ok && payload && payload.ok){
+          if (ok){
             App.addUploadRecord({ slug: chosenAnime.slug, episode: ep, quality: q, videoName: videoOut, subsName: s ? subsOut : null, user: a.email, ts: Date.now() });
 
-            // aktualizuj labely u kvalit
+            // aktualizace počítadel
             for (const opt of selQ.options){
               if (!opt.value) continue;
               const c = App.getUploadCountByQuality(chosenAnime.slug, ep, opt.value);
@@ -282,16 +264,16 @@
             showSuccess(`✅ Nahráno: ${chosenAnime.title} · díl ${ep} · ${q} (${videoOut})`);
             App.toast('Upload OK','ok');
           } else {
-            const err = (payload && payload.error) ? String(payload.error) : `HTTP ${xhr.status}`;
             App.showMsg(msg, '❌ Upload selhal: ' + err, 'error');
           }
+
           barOverall.style.width='100%'; pctOverall.textContent='100%';
           setTimeout(()=>overall.classList.add('hidden'), 800);
         };
-
+        xhr.onerror = ()=>{ App.showMsg(msg, '❌ Chyba připojení.', 'error'); overall.classList.add('hidden'); };
         xhr.send(form);
       } catch (err) {
-        App.showMsg(msg, '❌ Upload selhal: '+(err?.message||err), 'error');
+        App.showMsg(msg, '❌ Upload selhal: '+err.message, 'error');
         overall.classList.add('hidden');
       }
     });
