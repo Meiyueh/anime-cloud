@@ -470,15 +470,24 @@ small{{opacity:.8}} a{{color:#7c5cff}}</style></head>
         email = (data.get("email") or "").strip().lower()
         password = (data.get("password") or "").strip()
         if not email or not password:
-            return self._json(400, {"error":"missing_fields"})
-
+            return self._json(400, {"ok": False, "error": "missing_fields"})
+    
         u = load_user(email)
         if not u or not verify_password(password, u.get("password_hash","")):
-            return self._json(403, {"error":"invalid_credentials"})
+            return self._json(403, {"ok": False, "error": "invalid_credentials"})
         if not u.get("verified"):
-            return self._json(403, {"error":"not_verified"})
-
-        return self._json(200, {"ok":True, "user":{"email":u["email"], "name":u.get("name"), "role":u.get("role","user"), "profile":u.get("profile")}})
+            return self._json(403, {"ok": False, "error": "not_verified"})
+    
+        # (volitelně) jednoduchý session token – pro FE stačí mít non-empty string
+        token = gen_token()
+    
+        user_payload = {
+            "email": u["email"],
+            "name": u.get("name"),
+            "role": u.get("role", "user"),
+            "profile": u.get("profile", {})
+        }
+        return self._json(200, {"ok": True, "user": user_payload, "token": token})
 
     # --- UPLOAD multipart ---
     def handle_upload(self):
@@ -638,3 +647,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
