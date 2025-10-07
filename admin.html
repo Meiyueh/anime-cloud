@@ -23,7 +23,6 @@
     .tickets .controls-left{display:flex;align-items:center;gap:8px;justify-content:flex-start;}
     .tickets .controls-right{margin-left:auto;display:flex;align-items:center;}
     .tickets select{width:auto;min-width:160px;text-align-last:left;min-height:36px;}
-    #addAnimePanel input, #addAnimePanel select, #addAnimePanel textarea { padding:.65rem .7rem; }
     .req { color:#c62828; margin-left:4px; font-weight:700; }
     .filters-left{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
     .filters-right{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-left:auto; }
@@ -59,12 +58,17 @@
           <h2>Seznam nahrávek</h2>
           <div class="actions-top" style="display:flex;gap:8px;flex-wrap:wrap;">
             <button id="btnAddAnime" class="btn">Přidat anime</button>
+            <button id="btnExport" class="btn">Export JSON</button>
+            <button id="btnTickets" class="btn">Tikety</button>
+            <button id="btnClearLocal" class="btn">Vyčistit lokální katalog</button>
+            <button id="btnWipeAll" class="btn danger">Smazat vše</button>
           </div>
         </div>
 
         <div class="filters" style="margin-bottom:8px;">
           <div class="filters-left">
             <input id="fSearch" class="w-compact-sm" type="text" placeholder="Hledat anime." />
+            <select id="fUser" class="w-compact-sm"><option value="">— uživatel —</option></select>
             <select id="fQual" class="w-compact-sm">
               <option value="">— kvalita —</option><option>480p</option><option>720p</option><option>1080p</option><option>2160p</option>
             </select>
@@ -105,19 +109,19 @@
 
           <div class="row" style="grid-column:1 / -1;">
             <label>Popis <span class="req">*</span></label>
-            <textarea id="anDesc" rows="4" required placeholder="popis…"></textarea>
+            <textarea id="anDesc" rows="4" required placeholder="např. Ichigo Kurosaki získá sílu Shinigami..."></textarea>
           </div>
 
           <div class="row">
             <label>Cover (obrázek) <span class="req">*</span></label>
             <input id="anCoverFile" type="file" accept="image/*" required>
-            <small class="muted">Doporučeno ~600×900.</small>
+            <small class="muted">Nahraj obrázek coveru (doporučeno ~ 600×900).</small>
             <img id="anCoverPreview" alt="" style="display:none; max-width:160px; border-radius:8px; margin-top:6px; border:1px solid var(--border);">
           </div>
 
           <div class="row">
             <label>Studio <span class="req">*</span></label>
-            <input id="anStudio" type="text" required>
+            <input id="anStudio" type="text" required placeholder="např. Studio Pierrot">
           </div>
 
           <div class="row">
@@ -150,7 +154,6 @@
   <script>
     window.CLOUD_BASE = "https://storage.googleapis.com/anime-cloud";
     App.initNavbar();
-
     if (!App.isAdmin()){
       document.getElementById('guard').style.display='block';
     } else {
@@ -158,106 +161,203 @@
       initAdmin();
     }
 
-    async function apiGet(path){ const r = await App.apiFetch(path); return await r.json(); }
-    async function apiPost(path, body){ const r = await App.apiFetch(path, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)}); return await r.json(); }
+    function initAdmin(){
+      let uploadsAll = App.getUploads().slice().sort((a,b)=>b.ts-a.ts);
+      const usersMap = JSON.parse(localStorage.getItem('animecloud_users')||'{ }');
 
-    async function initAdmin(){
-      // DASH ze /stats
-      try {
-        const st = await apiGet('/stats');
-        document.getElementById('dash').innerHTML = `
-          <h2>Dashboard</h2>
-          <div class="dash-grid">
-            <div class="card"><strong>Počet ověřených uživatelů</strong><div class="muted">${st.users_verified}</div></div>
-            <div class="card"><strong>Celkem uploadů (video)</strong><div class="muted">${st.uploads_total}</div></div>
-            <div class="card"><strong>Nejaktivnější anime</strong><div class="muted">${st.top_anime?.slug || '—'} (${st.top_anime?.episodes || 0} ep)</div></div>
-          </div>`;
-      } catch(e){ /* ignore */ }
+      // DASH
+      const dash = document.getElementById('dash');
+      const perUser = {};
+      uploadsAll.forEach(u => { perUser[u.user]=(perUser[u.user]||0)+1; });
+      const topUser = Object.entries(perUser).sort((a,b)=>b[1]-a[1])[0];
+      dash.innerHTML = `
+        <h2>Dashboard</h2>
+        <div class="dash-grid">
+          <div class="card"><strong>Počet uživatelů (lokál)</strong><div class="muted">${Object.keys(usersMap).length}</div></div>
+          <div class="card"><strong>Celkem uploadů (lokál)</strong><div class="muted">${uploadsAll.length}</div></div>
+          <div class="card"><strong>Top uploader (lokál)</strong><div class="muted">${topUser?`${topUser[0]} (${topUser[1]})`:'—'}</div></div>
+        </div>`;
 
-      // TREE z GCS
-      const treeWrap = document.getElementById('treeWrap');
+      // FILTRY + STROM (lokální evidence)
       const fSearch = document.getElementById('fSearch');
-      const fQual = document.getElementById('fQual');
+      const fUser   = document.getElementById('fUser');
+      const fQual   = document.getElementById('fQual');
+      const treeWrap= document.getElementById('treeWrap');
+      const uniqueUsers = [...new Set(uploadsAll.map(u=>u.user))].sort();
+      fUser.innerHTML = `<option value="">— uživatel —</option>` + uniqueUsers.map(u=>`<option>${u}</option>`).join('');
 
-      const raw = await apiGet('/admin/uploads/tree');
-      let tree = raw.tree || {};
-
-      function buildTreeHTML(obj){
-        const slugs = Object.keys(obj).sort();
-        if (!slugs.length) return '<p class="muted">Žádná data.</p>';
+      function grouped(list){
+        const map={};
+        list.forEach((u,i)=>{
+          const s=u.slug, e=String(u.episode), q=u.quality;
+          if(!map[s]) map[s]={}; if(!map[s][e]) map[s][e]={}; if(!map[s][e][q]) map[s][e][q]=[];
+          map[s][e][q].push({...u,_idx:i});
+        });
+        return map;
+      }
+      function buildTree(list){
+        const g = grouped(list);
+        const slugs = Object.keys(g).sort(); if(!slugs.length) return '<p class="muted">Žádná data.</p>';
         return slugs.map(slug=>{
-          const eps = obj[slug].episodes || {};
-          const epHtml = Object.keys(eps).sort().map(ep=>{
+          const eps = g[slug];
+          const epHtml = Object.keys(eps).sort((a,b)=>Number(a)-Number(b)).map(ep=>{
             const quals = eps[ep];
             const qualHtml = ['480p','720p','1080p','2160p'].map(q=>{
-              const arr = (quals[q]||[]).slice().sort((a,b)=> (b.updated||'').localeCompare(a.updated||''));
+              const arr = (quals[q]||[]).slice().sort((x,y)=>y.ts-x.ts);
               const files = arr.map(u=>`
                 <li>
-                  <span class="code">${u.name}</span>
-                  &nbsp;<span class="small">(${u.size} B)</span>
+                  <span class="code">${u.videoName}</span>
+                  ${u.subsName?`&nbsp;<span class="small">[${u.subsName}]</span>`:''}
+                  &nbsp;<span class="small">(${new Date(u.ts).toLocaleString()})</span>
+                  <button class="btn danger inline" data-del data-slug="${u.slug}" data-ep="${u.episode}" data-q="${u.quality}" data-name="${u.videoName}">Smazat</button>
                 </li>`).join('');
-              return `<details><summary>${q==='2160p'?'4K (2160p)':q} <span class="small">(${arr.length})</span></summary><ul class="list-simple tree">${files||'<li class="small">Žádná data</li>'}</ul></details>`;
+              return `<details><summary>${q==='2160p'?'4K (2160p)':q} <span class="small">(${arr.length}/3)</span></summary><ul class="list-simple tree">${files||'<li class="small">Žádná data</li>'}</ul></details>`;
             }).join('');
-            return `<details><summary>Díl ${Number(ep)}</summary><div class="tree">${qualHtml}</div></details>`;
+            return `<details><summary>Díl ${ep}</summary><div class="tree">${qualHtml}</div></details>`;
           }).join('');
           return `<details><summary>${slug}</summary><div class="tree">${epHtml||'<p class="small">Žádné díly</p>'}</div></details>`;
         }).join('');
       }
-
       function applyFilters(){
+        uploadsAll = App.getUploads().slice().sort((a,b)=>b.ts-a.ts);
+        let arr = uploadsAll.slice();
         const q = (fSearch.value||'').toLowerCase();
-        const qual = fQual.value;
-        const filtered = {};
-        for (const [slug, data] of Object.entries(tree)){
-          if (q && !slug.toLowerCase().includes(q)) continue;
-          const eps = {};
-          for (const [ep, quals] of Object.entries(data.episodes||{})){
-            const qmap = {};
-            for (const [k, arr] of Object.entries(quals)){
-              if (qual && k !== qual) continue;
-              qmap[k] = arr;
-            }
-            if (Object.keys(qmap).length) eps[ep] = qmap;
-          }
-          if (Object.keys(eps).length) filtered[slug] = { episodes: eps, counts: data.counts };
-        }
-        treeWrap.innerHTML = buildTreeHTML(filtered);
+        const u = fUser.value; const qual=fQual.value;
+        if(q) arr=arr.filter(x=>x.slug.toLowerCase().includes(q));
+        if(u) arr=arr.filter(x=>x.user===u);
+        if(qual) arr=arr.filter(x=>x.quality===qual);
+        treeWrap.innerHTML = buildTree(arr);
+        wireDeleteButtons();
       }
-      [fSearch, fQual].forEach(el=> el.addEventListener('input', applyFilters));
+      [fSearch,fUser,fQual].forEach(el=>el.addEventListener('input',applyFilters));
       applyFilters();
+
+      function wireDeleteButtons(){
+        treeWrap.querySelectorAll('[data-del]').forEach(btn=>{
+          btn.addEventListener('click', async ()=>{
+            const slug=btn.dataset.slug, ep=Number(btn.dataset.ep), q=btn.dataset.q, name=btn.dataset.name;
+            if (!confirm(`Smazat ${name}?`)) return;
+            try{
+              await fetch(App.api('/delete'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({anime:slug,episode:ep,quality:q,videoName:name})});
+            }catch{}
+            // Lokálně smaž záznam a přerenderuj bez reloadu
+            const ls = App.getUploads();
+            const idx = ls.findIndex(u=>u.slug===slug&&u.episode===ep&&u.quality===q&&u.videoName===name);
+            if(idx>=0){ ls.splice(idx,1); App.setUploads(ls); }
+            App.toast('Záznam smazán','ok');
+            const openKeys = Array.from(document.querySelectorAll('#treeWrap details[open] > summary')).map(s => s.textContent.trim());
+            applyFilters();
+            openKeys.forEach(key=>{
+              const s = Array.from(document.querySelectorAll('#treeWrap details > summary')).find(x => x.textContent.trim() === key);
+              if (s) s.parentElement.setAttribute('open','');
+            });
+          });
+        });
+      }
+
+      // Export
+      document.getElementById('btnExport').addEventListener('click', ()=>{
+        const data = JSON.stringify(App.getUploads(), null, 2);
+        const blob = new Blob([data], {type:'application/json'});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a'); a.href=url; a.download='uploads_export.json'; a.click();
+        URL.revokeObjectURL(url);
+      });
+
+      document.getElementById('btnClearLocal').addEventListener('click', ()=>{
+        if (!confirm('Smazat lokální doplňkový katalog (animecloud_custom_anime)?')) return;
+        localStorage.removeItem('animecloud_custom_anime');
+        App.toast('Lokální katalog vyčištěn','ok');
+      });
 
       // Tikety
       const ticketsPanel = document.getElementById('ticketsPanel');
-      const btnTickets = document.createElement('button');
-      btnTickets.className='btn';
-      btnTickets.textContent='Tikety';
-      btnTickets.addEventListener('click', ()=>{ ticketsPanel.style.display='block'; renderTickets(); });
-      document.querySelector('#uploadsCard .actions-top').appendChild(btnTickets);
-      document.getElementById('btnCloseTickets').addEventListener('click', ()=> ticketsPanel.style.display='none');
+      const ticketsList  = document.getElementById('ticketsList');
+      document.getElementById('btnTickets').addEventListener('click', async ()=>{
+        ticketsPanel.style.display='block';
+        await renderTickets();
+      });
+      document.getElementById('btnCloseTickets').addEventListener('click', ()=>ticketsPanel.style.display='none');
+
+      async function fetchTickets(){
+        try{
+          const r = await fetch(App.api('/feedback/list'));
+          const p = await r.json();
+          return p?.ok ? (p.items||[]) : [];
+        }catch{return [];}
+      }
 
       async function renderTickets(){
-        const r = await apiGet('/feedback/list');
-        const list = (r.items||[]).slice();
-        const wrap = document.getElementById('ticketsList');
-        if (!list.length){ wrap.innerHTML = '<p class="muted">Žádné tikety.</p>'; return; }
-        wrap.innerHTML = list.map(t => `
+        const list = await fetchTickets();
+        if (!list.length){ ticketsList.innerHTML = '<p class="muted">Žádné tikety.</p>'; return; }
+        // zachovej otevřené
+        const opened = new Set(Array.from(ticketsList.querySelectorAll('details[open]')).map(d=>d.dataset.id));
+        ticketsList.innerHTML = list.map(t => `
           <div class="ticket-card">
-            <details data-id="${t.id}">
+            <details data-id="${t.id}" ${opened.has(t.id)?'open':''}>
               <summary>[${t.category||'—'}] ${new Date(t.ts||Date.now()).toLocaleString()} — ${t.user||t.name||'anonym'} ${t.priority?('• '+t.priority):''} — <span class="small">${t.status||'open'}</span></summary>
               <div class="thread">
-                ${ (t.messages||[]).map(m => `
+                ${(t.messages||[]).map(m=>`
                   <div class="msgRow ${m.role==='admin'?'admin':''}">
                     <div>
                       <div class="bubble">${(m.text||'').replace(/</g,'&lt;')}</div>
                       <div class="meta">${m.author||m.role} • ${new Date(m.ts||Date.now()).toLocaleString()}</div>
                     </div>
-                  </div>`).join('') }
+                  </div>`).join('')}
               </div>
+              ${ ['resolved','approved','rejected'].includes(t.status) ? `
+                <p class="muted" style="margin-top:.5rem">Tiket je uzavřen administrátorem.</p>
+              ` : `
+                <div class="row" style="margin-top:.6rem;">
+                  <label>Odpověď admina</label>
+                  <textarea id="reply_${t.id}" rows="3" placeholder="Napiš odpověď..."></textarea>
+                </div>
+                <div class="row controls">
+                  <div class="controls-left">
+                    <select id="st_${t.id}">
+                      ${['open','approved','rejected','resolved'].map(s=>`<option value="${s}" ${(t.status||'open')===s?'selected':''}>${s}</option>`).join('')}
+                    </select>
+                  </div>
+                  <div class="controls-right">
+                    <button class="btn" data-save="${t.id}">Odeslat</button>
+                  </div>
+                </div>
+              `}
             </details>
-          </div>`).join('');
+          </div>
+        `).join('');
+
+        ticketsList.querySelectorAll('[data-save]').forEach(b=>{
+          b.addEventListener('click', async ()=>{
+            const id = b.getAttribute('data-save');
+            const reply = (document.getElementById('reply_'+id)?.value||'').trim();
+            const st = document.getElementById('st_'+id)?.value;
+            try{
+              const resp = await fetch(App.api('/feedback/update'),{
+                method:'POST',
+                headers:{'Content-Type':'application/json'},
+                body: JSON.stringify({ id, message: reply || undefined, status: st, role:'admin', author: App.auth().email })
+              });
+              const p = await resp.json();
+              if (p?.ok){ App.toast('Ticket uložen','ok'); await renderTickets(); }
+              else App.toast('Chyba při ukládání','error');
+            }catch{ App.toast('Chyba připojení','error'); }
+          });
+        });
       }
 
-      // Přidat anime (pošli cover jako dataURL)
+      // Wipe placeholder
+      document.getElementById('btnWipeAll').addEventListener('click', async ()=>{
+        const pass = prompt('Zadej heslo pro smazání VŠECH souborů v uploads/ (nevratné):');
+        if (!pass) return;
+        try{
+          const r = await fetch(App.api('/wipe_all'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:pass})});
+          if (r.ok){ App.setUploads([]); App.toast('Smazáno na serveru i lokálně','ok'); location.reload(); }
+          else App.toast('Špatné heslo nebo chyba serveru','error');
+        }catch{ App.toast('Chyba připojení','error'); }
+      });
+
+      // Přidat anime (server → GCS + lokální offline katalog)
       const addPanel = document.getElementById('addAnimePanel');
       document.getElementById('btnAddAnime').addEventListener('click', ()=> addPanel.style.display='block');
       document.getElementById('btnCloseAddAnime').addEventListener('click', ()=> addPanel.style.display='none');
@@ -274,29 +374,26 @@
         const year = Number(document.getElementById('anYear').value);
         const studio = document.getElementById('anStudio').value.trim();
         const msgEl = document.getElementById('addAnimeMsg');
-
         if (!slug||!title||!episodes||!genres.length||!description||!coverFile||!status||!year||!studio){
           return App.showMsg(msgEl,'Vyplň všechna pole.','error');
         }
-
-        const cover = await new Promise((resolve,reject)=>{
-          const r = new FileReader();
-          r.onload = ()=>resolve(r.result);
-          r.onerror = reject;
-          r.readAsDataURL(coverFile);
-        });
-
+        const cover = await new Promise((resolve,reject)=>{ const r=new FileReader(); r.onload=()=>resolve(r.result); r.onerror=reject; r.readAsDataURL(coverFile); });
         try{
-          const resp = await App.apiFetch('/admin/add_anime', {
+          const resp = await fetch(App.api('/admin/add_anime'), {
             method:'POST', headers:{'Content-Type':'application/json'},
             body: JSON.stringify({ slug,title,episodes,genres,description,cover,status,year,studio })
           });
-          const payload = await resp.json().catch(()=> ({}));
-          if (!resp.ok || !payload.ok) throw new Error(payload.error || ('HTTP '+resp.status));
+          const payload = await resp.json();
+          if (!resp.ok || !payload?.ok) throw new Error(payload?.error||resp.status);
+          // lokálně pro offline
+          const storeKey='animecloud_custom_anime';
+          const list=(JSON.parse(localStorage.getItem(storeKey)||'[]')||[]).filter(a=>a.slug!==slug);
+          list.push({slug,title,episodes,genres,description,cover,status,year,studio});
+          localStorage.setItem(storeKey, JSON.stringify(list));
           const prev = document.getElementById('anCoverPreview'); prev.src = cover; prev.style.display='block';
           App.showMsg(msgEl,'✅ Uloženo a zapsáno do anime.json.','ok');
-        } catch(err){
-          App.showMsg(msgEl,'⚠️ Nepodařilo se uložit: ' + (err.message||err), 'error');
+        }catch(err){
+          App.showMsg(msgEl,'⚠️ Chyba při ukládání: '+err.message, 'error');
         }
       });
     }
