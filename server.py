@@ -756,5 +756,87 @@ def main():
 if __name__ == "__main__":
     main()
 
+    # ===== KODI =====
+    @app.route('/catalog')
+    def catalog():
+        """
+        Vrátí list anime položek s episodes_count.
+        Bereme data/anime.json + GET /uploads/counts pro mapu epizod.
+        """
+        from google.cloud import storage
+        import json
+    
+        # načti anime.json (stejně jako to děláš jinde)
+        anime = load_json_from_gcs('data/anime.json')  # TODO: použij svůj helper
+        counts = get_upload_counts()                   # TODO: wrap k /uploads/counts logice nebo ji přímo zavolej
+    
+        out = []
+        for a in anime:
+            slug = a.get('slug')
+            cover_url = public_url_for(f"covers/{slug}.jpg")  # nebo .png/.webp, případně si to už ukládáš jako plnou URL
+            out.append({
+                'slug': slug,
+                'title': a.get('title'),
+                'genres': a.get('genres', []),
+                'year': a.get('year'),
+                'studio': a.get('studio'),
+                'plot': a.get('plot', ''),
+                'cover': cover_url,
+                'episodes_count': counts.get(slug, 0),
+            })
+        return jsonify(out)
+
+    @app.route('/stream/sign')
+    def stream_sign():
+        """
+        Vstup: slug, ep (00001), q (např. 1080p)
+        Najde první přehratelný soubor v anime/{slug}/{ep}/{q}/
+        Podepíše na GET a vrátí {url, subtitles_url?, title}
+        """
+        from google.cloud import storage
+        from google.cloud.storage.blob import Blob
+        import datetime
+    
+        slug = request.args.get('slug', '').strip()
+        ep   = request.args.get('ep', '').strip()      # očekáváme 00001 (5 znaků)
+        q    = request.args.get('q', '').strip()
+    
+        if not slug or not ep or not q:
+            return jsonify({'error': 'missing parameters'}), 400
+    
+        client = storage.Client()
+        bucket = client.bucket(GCS_BUCKET)  # použij svou konstantu
+    
+        prefix = f"anime/{slug}/{ep}/{q}/"
+        blobs  = list(client.list_blobs(GCS_BUCKET, prefix=prefix))
+    
+        # vyber video podle přípony (priorita .m3u8, .mp4, .mkv)
+        def pick(blobs, exts):
+            for ext in exts:
+                for b in blobs:
+                    if b.name.lower().endswith(ext):
+                        return b
+            return None
+    
+        video_blob = pick(blobs, ['.m3u8', '.mp4', '.mkv'])
+        if not video_blob:
+            return jsonify({'error': f'no media in {prefix}'}), 404
+    
+        # titulky (volitelné)
+        sub_blob = None
+        for b in blobs:
+            if b.name.lower().endswith('.srt'):
+                sub_blob = b
+                break
+    
+        expires = datetime.timedelta(hours=6)  # přehrávače si to během sezení stáhnou
+        video_url = video_blob.generate_signed_url(version='v4', expiration=expires, method='GET')
+        subs_url  = sub_blob.generate_signed_url(version='v4', expiration=expires, method='GET') if sub_blob else None
+    
+        # hezký název
+        title = f"{slug} — {int(ep):02d} ({q})"
+    
+        return jsonify({'url': video_url, 'subtitles_url': subs_url, 'title': title})
+
 
 
