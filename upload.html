@@ -16,11 +16,25 @@
     @media (max-width: 700px) { .row-files { grid-template-columns: 1fr; } }
     .field { display:flex; flex-direction:column; gap:6px; }
     .file-info{font-size:.9rem;color:var(--muted)}
-    #rowAnime, #rowEp, #rowQ { display:flex; flex-direction:column; align-items:flex-start; gap:6px; }
+    #rowAnime, #rowEp, #rowQ {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 6px;
+    }
     #panel .row.compact.align-left{ gap: 6px; }
     #panel .row.compact.align-left > div{ margin-top: 0 !important; }
+
+    /* Stejná šířka všech selectů */
     #panel select { width: 320px !important; text-align-last: left; }
-    @media (max-width:560px){ #panel select{ width:100% !important; max-width:none; } }
+
+    @media (max-width:560px){
+      #panel select{ width:100% !important; max-width:none; }
+    }
+
+    /* mini progress pro jednotlivé soubory */
+    .file-mini-progress{height:6px;background:#0f0f1d;border:1px solid var(--border);border-radius:999px;overflow:hidden}
+    .file-mini-progress>div{height:100%;width:0%;background:linear-gradient(90deg,#7c5cff,#35c759,#7c5cff);background-size:200% 100%;animation:slide 2s linear infinite;transition:width .12s}
   </style>
 </head>
 <body>
@@ -108,9 +122,13 @@
 
   <script src="scripts/app.js"></script>
   <script>
+    // GCS veřejná základna pro čtení (katalog, obrázky)
     window.CLOUD_BASE = "https://storage.googleapis.com/anime-cloud";
-    App.initNavbar(); App.guardAuthOnPage('login.html');
 
+    App.initNavbar();
+    App.guardAuthOnPage('login.html');
+
+    // ---- DOM refs
     const btnOpen = document.getElementById('btnOpen');
     const panel = document.getElementById('panel');
     const selAnime = document.getElementById('selAnime');
@@ -134,9 +152,10 @@
     }
     function hideSuccess(){ successBox.classList.add('hidden'); successBox.textContent=''; }
 
+    // otevři panel + načti katalog z GCS
     btnOpen.addEventListener('click', async ()=> {
       btnOpen.classList.add('hidden'); panel.style.display='block';
-      animeList = await App.fetchAnime('data/anime.json');
+      animeList = await App.fetchAnime('data/anime.json'); // App.fetchAnime použije CLOUD_BASE
       App.populateSelectWithPlaceholder(selAnime, '— vyber anime —');
       animeList.forEach(a => { const opt=document.createElement('option'); opt.value=a.slug; opt.textContent=a.title; selAnime.appendChild(opt); });
       rowEp.style.display='none'; rowQ.style.display='none'; rowFiles.style.display='none'; rowSubmit.style.display='none';
@@ -202,7 +221,60 @@
       rowSubmit.style.display = (hasVideo && (hasSubs || isAdmin)) ? 'block' : 'none';
     }
 
-    // Upload + progress
+    // ---- Signed URL helpery
+    async function signUrls({ slug, ep, q, videoOut, vFile, subsOut, sFile }) {
+      const payload = {
+        anime: slug,
+        episode: ep,
+        quality: q,
+        videoName: videoOut,
+        videoType: vFile.type || mimeFromExt(vFile.name) || "video/mp4",
+        ...(sFile ? { subsName: subsOut, subsType: "application/x-subrip" } : {})
+      };
+      const r = await fetch(App.api('/upload/sign'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const p = await r.json().catch(()=>null);
+      if (!r.ok || !p?.ok) {
+        const err = (p && p.error) ? p.error : `HTTP ${r.status}`;
+        throw new Error('sign_failed: '+err);
+      }
+      return p;
+    }
+
+    function putWithProgress(url, file, contentType, onProgress) {
+      return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('PUT', url);
+        xhr.setRequestHeader('Content-Type', contentType || 'application/octet-stream');
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable && typeof onProgress === 'function') {
+            onProgress(e.loaded, e.total);
+          }
+        };
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) resolve();
+          else reject(new Error(`PUT failed: ${xhr.status} ${xhr.responseText || ''}`));
+        };
+        xhr.onerror = () => reject(new Error('network_error'));
+        xhr.send(file);
+      });
+    }
+
+    // util: MIME podle přípony (fallback)
+    function mimeFromExt(name){
+      const n = (name||'').toLowerCase();
+      if (n.endsWith('.mp4')) return 'video/mp4';
+      if (n.endsWith('.webm')) return 'video/webm';
+      if (n.endsWith('.mkv')) return 'video/x-matroska';
+      if (n.endsWith('.mov')) return 'video/quicktime';
+      if (n.endsWith('.m4v')) return 'video/x-m4v';
+      return '';
+    }
+
+    // Upload + progress (přímý PUT do GCS)
     btnUpload.addEventListener('click', async () => {
       const a = App.auth(); if (!chosenAnime) return;
       const ep = Number(selEp.value); const q = selQ.value;
@@ -219,66 +291,67 @@
       const nextIndex = currentQ + 1;
       const vExt = App.extOrDefault(v.name, 'mp4');
       const videoOut = `${q}_${nextIndex}.${vExt}`;
-      const subsOut  = `${q}_${nextIndex}.srt`;
-
-      const form = new FormData();
-      form.append('anime', chosenAnime.slug);
-      form.append('episode', ep);
-      form.append('quality', q);
-      form.append('video', v);
-      form.append('videoName', videoOut);
-      if (s){ form.append('subs', s); form.append('subsName', subsOut); }
+      const subsOut  = s ? `${q}_${nextIndex}.srt` : null;
 
       overall.classList.remove('hidden');
       barOverall.style.width='0%'; pctOverall.textContent='0%';
       miniPV.style.width='0%'; miniPS.style.width='0%';
+      hideSuccess(); msg.textContent='';
 
       try {
-        const xhr = new XMLHttpRequest();
-        xhr.open('POST', App.api('/upload'));
-        xhr.responseType = 'json';
-        xhr.upload.onprogress = (e)=>{ if (e.lengthComputable){ const p = Math.round(e.loaded/e.total*100); barOverall.style.width=p+'%'; pctOverall.textContent=p+'%'; miniPV.style.width=p+'%'; if (s) miniPS.style.width=p+'%'; } };
-        xhr.onload = ()=> {
-          let ok = false, err = null, payload = xhr.response;
-          if (xhr.status === 200 && payload && payload.ok) {
-            ok = true;
-          } else {
-            try { if (!payload) payload = JSON.parse(xhr.responseText||'{}'); } catch {}
-            err = (payload && payload.error) ? payload.error : `HTTP ${xhr.status}`;
-          }
+        // 1) vyžádat Signed URL ze serveru
+        const signed = await signUrls({ slug: chosenAnime.slug, ep, q, videoOut, vFile: v, subsOut, sFile: s });
 
-          if (ok){
-            App.addUploadRecord({ slug: chosenAnime.slug, episode: ep, quality: q, videoName: videoOut, subsName: s ? subsOut : null, user: a.email, ts: Date.now() });
-
-            // aktualizace počítadel
-            for (const opt of selQ.options){
-              if (!opt.value) continue;
-              const c = App.getUploadCountByQuality(chosenAnime.slug, ep, opt.value);
-              const base = (opt.value==='2160p') ? '4K (2160p)' : opt.value;
-              if (c>=3){ opt.disabled=true; opt.textContent = `${base} (FULL)`; }
-              else { opt.textContent = `${base} (${c}/3)`; }
-            }
-
-            rowSubmit.style.display='none'; fileVideo.value=''; fileSubs.value='';
-            videoInfo.textContent='—'; subsInfo.textContent='—';
-            showSuccess(`✅ Nahráno: ${chosenAnime.title} · díl ${ep} · ${q} (${videoOut})`);
-            App.toast('Upload OK','ok');
-          } else {
-            App.showMsg(msg, '❌ Upload selhal: ' + err, 'error');
-          }
-
-          barOverall.style.width='100%'; pctOverall.textContent='100%';
-          setTimeout(()=>overall.classList.add('hidden'), 800);
+        // 2) nahrát VIDEO
+        const totalBytes = (v?.size||0) + (s?.size||0);
+        let uploadedBytes = 0;
+        const updOverall = (absLoaded) => {
+          const pct = Math.round(((absLoaded) / (totalBytes || 1)) * 100);
+          barOverall.style.width = pct + '%';
+          pctOverall.textContent = pct + '%';
         };
-        xhr.onerror = ()=>{ App.showMsg(msg, '❌ Chyba připojení.', 'error'); overall.classList.add('hidden'); };
-        xhr.send(form);
-      } catch (err) {
-        App.showMsg(msg, '❌ Upload selhal: '+err.message, 'error');
+
+        await putWithProgress(signed.video.put_url, v, signed.video.content_type, (loaded, total) => {
+          miniPV.style.width = Math.round((loaded/total)*100) + '%';
+          updOverall(loaded + (s ? 0 : 0));
+        });
+        uploadedBytes += v.size; updOverall(uploadedBytes);
+
+        // 3) nahrát SUBS (pokud jsou)
+        if (s && signed.subs) {
+          await putWithProgress(signed.subs.put_url, s, signed.subs.content_type, (loaded, total) => {
+            miniPS.style.width = Math.round((loaded/total)*100) + '%';
+            updOverall(uploadedBytes + loaded);
+          });
+          uploadedBytes += s.size; updOverall(uploadedBytes);
+        }
+
+        // 4) zapsat lokální záznam + UI
+        App.addUploadRecord({ slug: chosenAnime.slug, episode: ep, quality: q, videoName: videoOut, subsName: s ? subsOut : null, user: a.email, ts: Date.now() });
+
+        // aktualizace počítadel kvality
+        for (const opt of selQ.options){
+          if (!opt.value) continue;
+          const c = App.getUploadCountByQuality(chosenAnime.slug, ep, opt.value);
+          const base = (opt.value==='2160p') ? '4K (2160p)' : opt.value;
+          if (c>=3){ opt.disabled=true; opt.textContent = `${base} (FULL)`; }
+          else { opt.textContent = `${base} (${c}/3)`; }
+        }
+
+        rowSubmit.style.display='none'; fileVideo.value=''; fileSubs.value='';
+        videoInfo.textContent='—'; subsInfo.textContent='—';
+        showSuccess(`✅ Nahráno: ${chosenAnime.title} · díl ${ep} · ${q} (${videoOut})`);
+
+        barOverall.style.width='100%'; pctOverall.textContent='100%';
+        setTimeout(()=>overall.classList.add('hidden'), 900);
+      } catch (e) {
+        console.error(e);
+        App.showMsg(msg, '❌ Upload selhal: ' + (e && e.message ? e.message : e), 'error');
         overall.classList.add('hidden');
       }
     });
 
-    // AUTO-PŘEDVOLBA z indexu
+    // AUTO-PŘEDVOLBA z indexu (zachováno)
     (async function preselectFromIndex(){
       const slug = localStorage.getItem('preselect_anime');
       if (!slug) return;
