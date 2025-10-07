@@ -27,6 +27,12 @@
     .filters-left{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
     .filters-right{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-left:auto; }
     .filters .w-compact-sm{ width:auto !important; min-width:160px; max-width:240px; }
+    .thread{margin-top:.6rem}
+    .msgRow{display:flex;gap:8px;margin:.35rem 0}
+    .msgRow.admin{justify-content:flex-end}
+    .bubble{max-width:80%;padding:.45rem .6rem;border-radius:10px;border:1px solid var(--border);background:#14142a}
+    .msgRow.admin .bubble{background:#1f233d}
+    .meta{font-size:.8rem;color:var(--muted);margin-top:.2rem}
   </style>
 </head>
 <body>
@@ -178,7 +184,7 @@
           <div class="card"><strong>Top uploader (lokál)</strong><div class="muted">${topUser?`${topUser[0]} (${topUser[1]})`:'—'}</div></div>
         </div>`;
 
-      // FILTRY + STROM (lokální evidence)
+      // FILTRY + STROM
       const fSearch = document.getElementById('fSearch');
       const fUser   = document.getElementById('fUser');
       const fQual   = document.getElementById('fQual');
@@ -240,7 +246,6 @@
             try{
               await fetch(App.api('/delete'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({anime:slug,episode:ep,quality:q,videoName:name})});
             }catch{}
-            // Lokálně smaž záznam a přerenderuj bez reloadu
             const ls = App.getUploads();
             const idx = ls.findIndex(u=>u.slug===slug&&u.episode===ep&&u.quality===q&&u.videoName===name);
             if(idx>=0){ ls.splice(idx,1); App.setUploads(ls); }
@@ -287,9 +292,18 @@
         }catch{return [];}
       }
 
+      function normalizeTicket(t){
+        if (!Array.isArray(t.messages) || !t.messages.length){
+          const init = (t.message||'').trim();
+          t.messages = init ? [{ id:t.id+'_0', role:'user', author:t.user||t.name||'anonym', text:init, ts:t.ts }] : [];
+        }
+        return t;
+      }
+
       async function renderTickets(){
-        const list = await fetchTickets();
+        let list = (await fetchTickets()).map(normalizeTicket);
         if (!list.length){ ticketsList.innerHTML = '<p class="muted">Žádné tikety.</p>'; return; }
+
         // zachovej otevřené
         const opened = new Set(Array.from(ticketsList.querySelectorAll('details[open]')).map(d=>d.dataset.id));
         ticketsList.innerHTML = list.map(t => `
@@ -385,7 +399,6 @@
           });
           const payload = await resp.json();
           if (!resp.ok || !payload?.ok) throw new Error(payload?.error||resp.status);
-          // lokálně pro offline
           const storeKey='animecloud_custom_anime';
           const list=(JSON.parse(localStorage.getItem(storeKey)||'[]')||[]).filter(a=>a.slug!==slug);
           list.push({slug,title,episodes,genres,description,cover,status,year,studio});
