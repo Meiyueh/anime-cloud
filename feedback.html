@@ -13,7 +13,7 @@
     .thread{margin-top:.6rem}
     .msgRow{display:flex;gap:8px;margin:.35rem 0}
     .msgRow.admin{justify-content:flex-end}
-    .bubble{max-width:80%;padding:.45rem .6rem;border-radius:10px;border:1px solid var(--border);background:#14142a;white-space:pre-wrap}
+    .bubble{max-width:80%;padding:.45rem .6rem;border-radius:10px;border:1px solid var(--border);background:#14142a}
     .msgRow.admin .bubble{background:#1f233d}
     .meta{font-size:.8rem;color:var(--muted);margin-top:.2rem}
     .centered{max-width:640px;margin:0 auto; text-align:left;}
@@ -35,7 +35,7 @@
 
   <main class="container">
     <h1 class="centered">Zpětná vazba &amp; Tikety</h1>
-    <p class="muted centered">Napiš chybu, návrh nebo žádost. Tiket se uloží na server a admini na něj mohou reagovat.</p>
+    <p class="muted centered">Napiš chybu, návrh nebo žádost. Offline se uloží lokálně; admini uvidí a mohou odpovídat – vznikne konverzace.</p>
 
     <form id="feedbackForm" class="card centered">
       <div class="row"><label for="fbName">Jméno / e-mail (volitelné)</label><input type="text" id="fbName" placeholder="např. animefan123"/></div>
@@ -75,14 +75,14 @@
     App.initNavbar(); App.guardAuthOnPage('login.html');
     const a = App.auth();
 
-    // odeslání nového (uloží se na server i lokálně jako fallback)
+    // odeslání nového
     document.getElementById('feedbackForm').addEventListener('submit', async e=>{
       e.preventDefault();
       const ts = Date.now();
       const payload = {
         id: 'tkt_'+ts,
         user: a.email || null,
-        name: document.getElementById('fbName').value.trim() || null,
+        name: document.getElementById('fbName').value.trim(),
         category: document.getElementById('fbCategory').value,
         priority: document.getElementById('fbPriority').value,
         message: document.getElementById('fbMessage').value.trim(),
@@ -91,52 +91,64 @@
       };
       if (!payload.category || !payload.message) return App.showMsg(document.getElementById('fbMsg'),'Vyplň kategorii a zprávu.','error');
 
-      // save on server
-      try{ await fetch(App.api('/feedback'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});}catch{}
-      // local mirror
-      App.saveFeedback(payload);
+      // Lokální offline kopie
+      const id = App.saveFeedback(payload);
 
-      e.target.reset();
-      App.showMsg(document.getElementById('fbMsg'),'✅ Odesláno. Děkujeme!','ok');
+      // Server
+      try{ await fetch(App.api('/feedback'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});}catch{}
+
+      e.target.reset(); App.showMsg(document.getElementById('fbMsg'),'✅ Odesláno. Děkujeme!','ok');
       renderMyTickets();
     });
 
-    async function fetchServerTickets(){
+    async function loadMyTicketsFromServer(){
       try{
         const r = await fetch(App.api('/feedback/list'));
         const p = await r.json();
-        return p?.ok ? (p.items||[]) : [];
-      }catch{return [];}
+        if (p?.ok) {
+          const mine = (p.items||[]).filter(t => (t.user||'') === (a.email||''));
+          return mine;
+        }
+      }catch{}
+      return null;
     }
 
-    function sanitize(s){ return String(s||'').replace(/</g,'&lt;'); }
-
     async function renderMyTickets(){
-      const all = await fetchServerTickets();
-      const mine = all.filter(t => t.user === a.email).sort((x,y)=> (y.ts||0)-(x.ts||0));
+      // preferuj server, fall back na lokál
+      let list = await loadMyTicketsFromServer();
+      if (!list) list = App.getFeedback().filter(x=>x.user===a.email).sort((x,y)=>y.ts-x.ts);
 
       const box = document.getElementById('myTickets');
-      if (!mine.length){ box.innerHTML = '<p class="muted">Zatím žádné.</p>'; return; }
+      if (!list.length){ box.innerHTML = '<p class="muted">Zatím žádné.</p>'; return; }
 
-      box.innerHTML = mine.map(t=>`
+      // normalize (pro jistotu)
+      list = list.map(t=>{
+        if (!Array.isArray(t.messages) || !t.messages.length){
+          const init = (t.message||'').trim();
+          t.messages = init ? [{ id:t.id+'_0', role:'user', author: t.user||t.name||'anonym', text:init, ts:t.ts }] : [];
+        }
+        return t;
+      });
+
+      box.innerHTML = list.map(t=>`
         <details>
           <summary>
             <span class="summary-line">
               <span class="marker"></span>
-              <strong>[${sanitize(t.category)}]</strong>
-              <span class="muted">${new Date(t.ts||Date.now()).toLocaleString()} • ${sanitize(t.priority||'normal')}</span>
-              <span class="muted">• stav: ${sanitize(t.status||'open')}</span>
+              <strong>[${t.category}]</strong>
+              <span class="muted">${new Date(t.ts).toLocaleString()} • ${t.priority}</span>
+              <span class="muted">• stav: ${t.status}</span>
             </span>
           </summary>
 
           <div class="thread">
-            ${(t.messages||[]).map(m => `
+            ${ (t.messages||[]).map(m => `
               <div class="msgRow ${m.role==='admin'?'admin':''}">
                 <div>
-                  <div class="bubble">${sanitize(m.text)}</div>
-                  <div class="meta">${sanitize(m.author||m.role)} • ${new Date(m.ts||Date.now()).toLocaleString()}</div>
+                  <div class="bubble">${(m.text||'').replace(/</g,'&lt;')}</div>
+                  <div class="meta">${m.author||m.role} • ${new Date(m.ts).toLocaleString()}</div>
                 </div>
-              </div>`).join('')}
+              </div>`).join('') }
           </div>
 
           ${ ['resolved','approved','rejected'].includes(t.status) ? `
@@ -156,16 +168,18 @@
           const id = b.getAttribute('data-reply');
           const ta = document.getElementById('reply_'+id);
           const txt = (ta.value||'').trim(); if(!txt) return;
+
           try{
-            const resp = await fetch(App.api('/feedback/update'),{
-              method:'POST',
-              headers:{'Content-Type':'application/json'},
+            const r = await fetch(App.api('/feedback/update'),{
+              method:'POST', headers:{'Content-Type':'application/json'},
               body: JSON.stringify({ id, message: txt, role:'user', author: a.email })
             });
-            const p = await resp.json();
+            const p = await r.json().catch(()=>({}));
             if (p?.ok){ App.toast('Odesláno','ok'); ta.value=''; renderMyTickets(); }
             else App.toast('Chyba při ukládání','error');
-          }catch{ App.toast('Chyba připojení','error'); }
+          }catch{
+            App.toast('Chyba připojení','error');
+          }
         });
       });
     }
