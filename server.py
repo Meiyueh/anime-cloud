@@ -478,8 +478,7 @@ small{{opacity:.8}} a{{color:#7c5cff}}</style></head>
         if not u.get("verified"):
             return self._json(403, {"ok": False, "error": "not_verified"})
     
-        # (volitelně) jednoduchý session token – pro FE stačí mít non-empty string
-        token = gen_token()
+        token = gen_token()  # jednoduchý session token (stačí non-empty string)
     
         user_payload = {
             "email": u["email"],
@@ -487,6 +486,11 @@ small{{opacity:.8}} a{{color:#7c5cff}}</style></head>
             "role": u.get("role", "user"),
             "profile": u.get("profile", {})
         }
+    
+        # (volitelně) debug do logu, ať je vidět, co vracíme
+        if DEBUG_AUTH:
+            print("[AUTH] login ok → payload:", {"ok": True, "user": user_payload, "token": "***"})
+    
         return self._json(200, {"ok": True, "user": user_payload, "token": token})
 
     # --- UPLOAD multipart ---
@@ -647,4 +651,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
