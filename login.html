@@ -105,34 +105,42 @@
       const email = document.getElementById('loginEmail').value.trim();
       const password = document.getElementById('loginPass').value.trim();
       if (!email || !password) return App.showMsg(msg, 'Vyplňte e-mail i heslo.', 'error');
-
+  
       try{
         const r = await fetch(App.api('/auth/login'), {
-          method:'POST', headers:{'Content-Type':'application/json'},
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
           body: JSON.stringify({ email, password })
         });
         const payload = await r.json().catch(()=> ({}));
+  
         if (!r.ok || !payload?.ok) {
-          if (payload?.error === 'not_verified') {
-            msg.innerHTML = `Účet ještě není ověřen. <button id="btnResend" class="w-compact-sm" style="margin-left:6px">Poslat znovu</button>`;
-            const btn = document.getElementById('btnResend');
-            if (btn) btn.addEventListener('click', async ()=>{
-              try {
-                const rr = await fetch(App.api('/auth/resend'), { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({email}) });
-                if (rr.ok) App.showMsg(msg,'Ověřovací e-mail znovu odeslán.','ok'); else App.showMsg(msg,'Nepodařilo se odeslat.','error');
-              } catch { App.showMsg(msg,'Chyba připojení.','error'); }
-            });
-            return;
-          }
           const err = payload?.error || ('HTTP '+r.status);
+          if (r.status === 403 && err === 'not_verified') {
+            return App.showMsg(msg, 'Účet ještě není ověřen. Zkontrolujte e-mail.', 'error');
+          }
           return App.showMsg(msg, 'Přihlášení selhalo: ' + err, 'error');
         }
-        // uložit auth do LS (payload: { ok, email, role })
-        const authObj = { email: payload.email, role: payload.role, at: Date.now() };
+  
+        // bezpečné „do-složení“ user objektu
+        const userObj = payload.user || {
+          email: payload.email,
+          role:  payload.role,
+          name:  payload.name || ''
+        };
+  
+        const authObj = {
+          email: userObj.email,
+          role: userObj.role || 'user',
+          token: payload.token || null,
+          at: Date.now()
+        };
         localStorage.setItem('animecloud_auth', JSON.stringify(authObj));
+  
         App.toast('Přihlášeno', 'ok');
-        location.href='index.html';
+        location.href = 'index.html';
       } catch(err){
+        console.error(err);
         App.showMsg(msg, 'Chyba připojení.', 'error');
       }
     });
@@ -170,3 +178,4 @@
   </script>
 </body>
 </html>
+
