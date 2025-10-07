@@ -468,55 +468,60 @@ h1{{margin:0 0 10px}} .msg{{color:{color};line-height:1.6}} a{{color:#7c5cff}}</
 
     # ===== Uploads =====
     def handle_upload(self):
-        fields = parse_multipart_stream(self)
-
-        anime   = (fields.get("anime") or "").strip().lower()
-        episode = int(str(fields.get("episode") or "0").strip() or "0")
-        quality = (fields.get("quality") or "").strip()
-
-        v_field = fields.get("video")
-        vname_client = (fields.get("videoName") or "")
-        s_field = fields.get("subs")
-        sname_client = (fields.get("subsName") or "")
-
-        if not anime or not episode or not quality or not v_field:
-            return self._json(400, {"ok":False,"error":"Missing fields"})
-
+        # očekáváme multipart/form-data
+        ctype = self.headers.get("Content-Type", "")
+        if not ctype.startswith("multipart/form-data"):
+            return self._json(400, {"ok": False, "error": "expected_multipart"})
+    
+        # FieldStorage čte přímo ze socketu a spouluje na disk – vhodné pro velké soubory
+        env = {
+            "REQUEST_METHOD": "POST",
+            "CONTENT_TYPE": ctype,
+        }
+        form = cgi.FieldStorage(
+            fp=self.rfile,
+            headers=self.headers,
+            environ=env,
+            keep_blank_values=True
+        )
+    
+        anime   = (form.getfirst("anime", "") or "").strip().lower()
+        episode = int(form.getfirst("episode", "0") or "0")
+        quality = (form.getfirst("quality", "") or "").strip()
+    
+        v_item  = form["video"] if "video" in form else None
+        s_item  = form["subs"]  if "subs"  in form else None
+    
+        # názvy souborů (bezpečně + default přípony)
+        vname = safe_name(form.getfirst("videoName", getattr(v_item, "filename", "video.mp4")) or "video.mp4")
+        if "." not in vname: vname += ".mp4"
+        sname = safe_name(form.getfirst("subsName", getattr(s_item, "filename", "subs.srt")) or "subs.srt")
+    
+        if not anime or not episode or not quality or not v_item:
+            return self._json(400, {"ok": False, "error": "missing_fields"})
+    
         ep_folder = f"{int(episode):05d}"
-
-        if isinstance(v_field, dict):
-            vname = safe_name(vname_client or v_field.get("filename") or "video.mp4")
-            v_mime = guess_mime(vname)
-        else:
-            return self._json(400, {"ok":False,"error":"Bad video field"})
-
-        if isinstance(s_field, dict):
-            sname = safe_name(sname_client or s_field.get("filename") or "subs.srt")
-            s_mime = guess_mime(sname)
-        else:
-            s_field = None
-            sname = None
-            s_mime = None
-
-        video_path = f"anime/{anime}/{ep_folder}/{quality}/{vname}"
-        subs_path  = f"anime/{anime}/{ep_folder}/{quality}/{sname}" if s_field else None
-
-        # STREAM do GCS
-        v_blob = Bucket.blob(video_path)
+        v_mime = guess_mime(vname, default="video/mp4")
+        s_mime = guess_mime(sname, default="application/x-subrip")
+    
+        v_path = f"anime/{anime}/{ep_folder}/{quality}/{vname}"
+        s_path = f"anime/{anime}/{ep_folder}/{quality}/{sname}"
+    
+        # upload videa (stream → GCS), FieldStorage drží .file otevřený => nepoužívej .read()
+        v_blob = Bucket.blob(v_path)
         v_blob.cache_control = "public, max-age=31536000, immutable"
-        v_file = v_field["file"]; v_file.seek(0)
-        v_blob.upload_from_file(v_file, content_type=v_mime)
-
+        v_file = v_item.file
+        v_blob.upload_from_file(v_file, content_type=v_mime, rewind=True)
+    
         s_url = None
-        if s_field:
-            s_blob = Bucket.blob(subs_path)
+        if s_item:
+            s_blob = Bucket.blob(s_path)
             s_blob.cache_control = "public, max-age=31536000, immutable"
-            s_file = s_field["file"]; s_file.seek(0)
-            s_blob.upload_from_file(s_file, content_type=s_mime)
-            s_url = gcs_public_url(subs_path)
-
-        v_url = gcs_public_url(video_path)
-        return self._json(200, {"ok":True, "video":v_url, "subs":s_url})
+            s_file = s_item.file
+            s_blob.upload_from_file(s_file, content_type=s_mime, rewind=True)
+            s_url = gcs_public_url(s_path)
+    
+        return self._json(200, {"ok": True, "video": gcs_public_url(v_path), "subs": s_url})
 
     def handle_delete_file(self):
         d = self._read_body()
@@ -750,5 +755,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
