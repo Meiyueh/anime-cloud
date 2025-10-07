@@ -168,13 +168,8 @@ def count_users():
             pass
     return total, verified
 
-# ===== Streaming multipart parser =====
+# ===== Streaming multipart (pro velké soubory) =====
 def parse_multipart_stream(handler):
-    """
-    Vrátí dict:
-      - pro text: key -> str
-      - pro soubory: key -> {"filename": "...", "file": <file-like>}
-    """
     env = {
         'REQUEST_METHOD': 'POST',
         'CONTENT_TYPE': handler.headers.get('Content-Type', ''),
@@ -256,7 +251,6 @@ class Handler(SimpleHTTPRequestHandler):
             try: return json.loads(raw.decode("utf-8"))
             except Exception: return {}
         if "application/x-www-form-urlencoded" in ctype:
-            from urllib.parse import parse_qs
             qs = parse_qs(raw.decode("utf-8"), keep_blank_values=True)
             return {k:(v[0] if isinstance(v,list) else v) for k,v in qs.items()}
         return {}
@@ -422,59 +416,55 @@ h1{{margin:0 0 10px}} .msg{{color:{color};line-height:1.6}} a{{color:#7c5cff}}</
 
     # ===== Uploads =====
     def handle_upload(self):
-        try:
-            fields = parse_multipart_stream(self)
+        fields = parse_multipart_stream(self)
 
-            anime   = (fields.get("anime") or "").strip().lower()
-            episode = int(str(fields.get("episode") or "0").strip() or "0")
-            quality = (fields.get("quality") or "").strip()
+        anime   = (fields.get("anime") or "").strip().lower()
+        episode = int(str(fields.get("episode") or "0").strip() or "0")
+        quality = (fields.get("quality") or "").strip()
 
-            v_field = fields.get("video")
-            vname_client = (fields.get("videoName") or "")
-            s_field = fields.get("subs")
-            sname_client = (fields.get("subsName") or "")
+        v_field = fields.get("video")
+        vname_client = (fields.get("videoName") or "")
+        s_field = fields.get("subs")
+        sname_client = (fields.get("subsName") or "")
 
-            if not anime or not episode or not quality or not v_field:
-                return self._json(400, {"ok":False,"error":"missing_fields"})
+        if not anime or not episode or not quality or not v_field:
+            return self._json(400, {"ok":False,"error":"Missing fields"})
 
-            ep_folder = f"{int(episode):05d}"
+        ep_folder = f"{int(episode):05d}"
 
-            if isinstance(v_field, dict):
-                vname = safe_name(vname_client or v_field.get("filename") or "video.mp4")
-                v_mime = guess_mime(vname)
-            else:
-                return self._json(400, {"ok":False,"error":"bad_video_field"})
+        if isinstance(v_field, dict):
+            vname = safe_name(vname_client or v_field.get("filename") or "video.mp4")
+            v_mime = guess_mime(vname)
+        else:
+            return self._json(400, {"ok":False,"error":"Bad video field"})
 
-            if isinstance(s_field, dict):
-                sname = safe_name(sname_client or s_field.get("filename") or "subs.srt")
-                s_mime = guess_mime(sname)
-            else:
-                s_field = None
-                sname = None
-                s_mime = None
+        if isinstance(s_field, dict):
+            sname = safe_name(sname_client or s_field.get("filename") or "subs.srt")
+            s_mime = guess_mime(sname)
+        else:
+            s_field = None
+            sname = None
+            s_mime = None
 
-            video_path = f"anime/{anime}/{ep_folder}/{quality}/{vname}"
-            subs_path  = f"anime/{anime}/{ep_folder}/{quality}/{sname}" if s_field else None
+        video_path = f"anime/{anime}/{ep_folder}/{quality}/{vname}"
+        subs_path  = f"anime/{anime}/{ep_folder}/{quality}/{sname}" if s_field else None
 
-            # STREAM do GCS (žádné ukládání na disk serveru)
-            v_blob = Bucket.blob(video_path)
-            v_blob.cache_control = "public, max-age=31536000, immutable"
-            v_file = v_field["file"]; v_file.seek(0)
-            v_blob.upload_from_file(v_file, content_type=v_mime)
+        # STREAM do GCS
+        v_blob = Bucket.blob(video_path)
+        v_blob.cache_control = "public, max-age=31536000, immutable"
+        v_file = v_field["file"]; v_file.seek(0)
+        v_blob.upload_from_file(v_file, content_type=v_mime)
 
-            s_url = None
-            if s_field:
-                s_blob = Bucket.blob(subs_path)
-                s_blob.cache_control = "public, max-age=31536000, immutable"
-                s_file = s_field["file"]; s_file.seek(0)
-                s_blob.upload_from_file(s_file, content_type=s_mime)
-                s_url = gcs_public_url(subs_path)
+        s_url = None
+        if s_field:
+            s_blob = Bucket.blob(subs_path)
+            s_blob.cache_control = "public, max-age=31536000, immutable"
+            s_file = s_field["file"]; s_file.seek(0)
+            s_blob.upload_from_file(s_file, content_type=s_mime)
+            s_url = gcs_public_url(subs_path)
 
-            v_url = gcs_public_url(video_path)
-            return self._json(200, {"ok":True, "video":v_url, "subs":s_url})
-        except Exception as e:
-            traceback.print_exc()
-            return self._json(500, {"ok":False, "error": f"upload_failed: {e}"})
+        v_url = gcs_public_url(video_path)
+        return self._json(200, {"ok":True, "video":v_url, "subs":s_url})
 
     def handle_delete_file(self):
         d = self._read_body()
@@ -483,44 +473,43 @@ h1{{margin:0 0 10px}} .msg{{color:{color};line-height:1.6}} a{{color:#7c5cff}}</
         quality = (d.get("quality") or "").strip()
         name = safe_name(d.get("videoName") or "")
         if not anime or not episode or not quality or not name:
-            return self._json(400, {"ok":False,"error":"missing_fields"})
+            return self._json(400, {"ok":False,"error":"Missing"})
         ep_folder = f"{int(episode):05d}"
         path = f"anime/{anime}/{ep_folder}/{quality}/{name}"
         ok = gcs_delete(path)
         return self._json(200 if ok else 404, {"ok":ok})
 
     # ===== Feedback =====
+    def _normalize_ticket(self, rec: dict) -> dict:
+        """Ujisti se, že ticket má messages[]. Pokud přišel jen 'message', převést na 1. položku vláka."""
+        if not isinstance(rec, dict): return {}
+        rec.setdefault("id", f"tkt_{int(time.time()*1000)}")
+        rec.setdefault("status", "open")
+        rec.setdefault("ts", int(time.time()*1000))
+        # uživatelská první zpráva
+        if "messages" not in rec or not isinstance(rec["messages"], list) or not rec["messages"]:
+            init_text = (rec.get("message") or "").strip()
+            author = rec.get("user") or rec.get("name") or "anonym"
+            if init_text:
+                rec["messages"] = [{
+                    "id": rec["id"]+"_0",
+                    "role": "user",
+                    "author": author,
+                    "text": init_text,
+                    "ts": rec["ts"]
+                }]
+            else:
+                rec["messages"] = []
+        # nepotřebné pole už neschovávejme
+        if "message" in rec: del rec["message"]
+        return rec
+
     def handle_feedback_save(self):
         d = self._read_body()
-        ts = int(d.get("ts") or time.time()*1000)
-        fid = safe_name(d.get("id") or f"tkt_{ts}")
+        d = self._normalize_ticket(d or {})
+        fid = safe_name(d.get("id") or f"tkt_{int(time.time()*1000)}")
         path = f"{FEEDBACK_PREFIX}/{fid}.json"
-
-        # Normalizace záznamu: vždy messages[]
-        rec = gcs_read_json(path, None)
-        if not rec:
-            rec = {
-                "id": fid,
-                "user": (d.get("user") or None),
-                "name": (d.get("name") or None),
-                "category": d.get("category") or "other",
-                "priority": d.get("priority") or "normal",
-                "status": d.get("status") or "open",
-                "ts": ts,
-                "messages": []
-            }
-
-        first_msg = (d.get("message") or d.get("text") or "").strip()
-        if first_msg:
-            rec["messages"].append({
-                "id": f"{fid}_0",
-                "role": "user",
-                "author": rec.get("user") or rec.get("name") or "anonym",
-                "text": first_msg,
-                "ts": ts
-            })
-
-        gcs_write_json(path, rec)
+        gcs_write_json(path, d)
         return self._json(200, {"ok":True})
 
     def handle_feedback_update(self):
@@ -530,20 +519,23 @@ h1{{margin:0 0 10px}} .msg{{color:{color};line-height:1.6}} a{{color:#7c5cff}}</
         path = f"{FEEDBACK_PREFIX}/{fid}.json"
         cur = gcs_read_json(path, {})
         if not cur: return self._json(404, {"ok":False,"error":"not_found"})
-        cur.setdefault("messages", [])
+        cur = self._normalize_ticket(cur)
 
+        # append message (optional)
         msg = (d.get("message") or "").strip()
         if msg:
+            cur.setdefault("messages", [])
             cur["messages"].append({
                 "id": f"{fid}_{len(cur['messages'])+1}",
-                "role": (d.get("role") or "admin"),
-                "author": d.get("author") or ( "admin" if (d.get("role") or "admin")=="admin" else "user"),
+                "role": d.get("role") or "admin",
+                "author": d.get("author") or "admin",
                 "text": msg,
                 "ts": int(time.time()*1000)
             })
-
+        # update status (optional)
         if d.get("status"):
             cur["status"] = d["status"]
+
         gcs_write_json(path, cur)
         return self._json(200, {"ok":True, "saved":cur})
 
@@ -554,7 +546,7 @@ h1{{margin:0 0 10px}} .msg{{color:{color};line-height:1.6}} a{{color:#7c5cff}}</
             if not b.name.endswith(".json"): continue
             try:
                 data = json.loads(b.download_as_bytes().decode("utf-8"))
-                out.append(data)
+                out.append(self._normalize_ticket(data))
             except Exception:
                 pass
         out.sort(key=lambda x: x.get("ts", 0), reverse=True)
@@ -607,8 +599,8 @@ h1{{margin:0 0 10px}} .msg{{color:{color};line-height:1.6}} a{{color:#7c5cff}}</
         slug = (fields.get("slug") or "").strip().lower()
         c_field = fields.get("cover")
         if not slug or not isinstance(c_field, dict):
-            return self._json(400, {"ok":False,"error":"missing_fields"})
-        mime = guess_mime(c_field.get("filename") or "cover.jpg", sniff=None, default="image/jpeg")
+            return self._json(400, {"ok":False,"error":"Missing"})
+        mime = guess_mime(c_field.get("filename") or "cover.jpg", default="image/jpeg")
         ext = {"image/png":"png","image/webp":"webp","image/gif":"gif","image/jpeg":"jpg"}.get(mime,"jpg")
         path = f"covers/{slug}.{ext}"
         blob = Bucket.blob(path); blob.cache_control = "public, max-age=31536000, immutable"
@@ -622,20 +614,22 @@ h1{{margin:0 0 10px}} .msg{{color:{color};line-height:1.6}} a{{color:#7c5cff}}</
 
         blobs = gcs_list("anime/")
         uploads_total = 0
-        ep_by_anime = {}
+        ep_by_anime = {}  # klíč (slug, ep_folder) → unikátní epizoda
 
         for b in blobs:
-            name = b.name  # anime/{slug}/{00001}/{quality}/file
-            if not any(name.lower().endswith(ext) for ext in VIDEO_EXTS):
+            name_raw = b.name
+            name = name_raw.lower()
+            if not any(name.endswith(ext) for ext in VIDEO_EXTS):
                 continue
-            parts = name.split("/")
-            if len(parts) < 5:
+            parts = name_raw.split("/")
+            if len(parts) < 5:  # anime/slug/00001/quality/file
                 continue
             slug = parts[1]
             ep_folder = parts[2]
             uploads_total += 1
             ep_by_anime[(slug, ep_folder)] = 1
 
+        # top anime podle unikátních epizod
         counts = {}
         for (slug, _ep) in ep_by_anime.keys():
             counts[slug] = counts.get(slug, 0) + 1
@@ -657,7 +651,7 @@ h1{{margin:0 0 10px}} .msg{{color:{color};line-height:1.6}} a{{color:#7c5cff}}</
         blobs = gcs_list("anime/")
         ep_by_anime = {}
         for b in blobs:
-            name = b.name
+            name = b.name  # anime/{slug}/{00001}/{quality}/file
             if not name.startswith("anime/"): continue
             if not any(name.lower().endswith(ext) for ext in VIDEO_EXTS): continue
             parts = name.split("/")
