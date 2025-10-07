@@ -100,7 +100,7 @@
     });
 
     // LOGIN -> /auth/login
-    document.getElementById('loginForm').addEventListener('submit', async e => {
+  document.getElementById('loginForm').addEventListener('submit', async e => {
       e.preventDefault();
       const email = document.getElementById('loginEmail').value.trim();
       const password = document.getElementById('loginPass').value.trim();
@@ -116,18 +116,21 @@
   
         if (!r.ok || !payload?.ok) {
           const err = payload?.error || ('HTTP '+r.status);
-          if (r.status === 403 && err === 'not_verified') {
+          if (err === 'not_verified') {
             return App.showMsg(msg, 'Účet ještě není ověřen. Zkontrolujte e-mail.', 'error');
           }
           return App.showMsg(msg, 'Přihlášení selhalo: ' + err, 'error');
         }
   
-        // bezpečné „do-složení“ user objektu
+        // robustní normalizace odpovědi
         const userObj = payload.user || {
           email: payload.email,
-          role:  payload.role,
+          role:  payload.role || 'user',
           name:  payload.name || ''
         };
+        if (!userObj?.email) {
+          return App.showMsg(msg, 'Server neposlal e-mail v odpovědi (špatný formát).', 'error');
+        }
   
         const authObj = {
           email: userObj.email,
@@ -138,13 +141,12 @@
         localStorage.setItem('animecloud_auth', JSON.stringify(authObj));
   
         App.toast('Přihlášeno', 'ok');
-        location.href = 'index.html';
+        location.href='index.html';
       } catch(err){
         console.error(err);
         App.showMsg(msg, 'Chyba připojení.', 'error');
       }
     });
-
     // REGISTER -> /auth/register (posíláme password i password2)
     document.getElementById('registerForm').addEventListener('submit', async e => {
       e.preventDefault();
@@ -178,4 +180,5 @@
   </script>
 </body>
 </html>
+
 
