@@ -79,24 +79,54 @@
     const msgBox = document.getElementById('fbMsg');
     const myTicketsBox = document.getElementById('myTickets');
 
-    // ——— UTIL ———
+    // utils
     const esc = (s)=> String(s||'').replace(/[&<>]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[ch]));
-    const eq = (x,y)=> String(x||'').toLowerCase() === String(y||'').toLowerCase();
+    const eq  = (x,y)=> String(x||'').toLowerCase() === String(y||'').toLowerCase();
 
+    // Sloučí staré pole 'message' + nové 'messages[]', deduplikuje a stabilně seřadí.
     function normalizeTicket(t){
-      // sjednotit starší strukturu {message} -> messages[0]
-      const msgs = [];
-      if (t.message && (!Array.isArray(t.messages) || !t.messages.length)) {
-        msgs.push({ id: t.id+'_0', role:'user', author: t.user || t.name || 'anonym', text: t.message, ts: t.ts || Date.now() });
+      const arr = Array.isArray(t.messages) ? t.messages.slice() : [];
+
+      // Pokud existuje starý root 'message', vždy ho vložíme jako 1. bublinu (pokud už tam není)
+      if (t.message) {
+        const root = {
+          id: t.id ? t.id+'_root' : 'root_'+(t.ts||Date.now()),
+          role: (t.role && (t.role==='admin' || t.role==='user')) ? t.role : 'user',
+          author: t.user || t.name || 'anonym',
+          text: String(t.message),
+          ts: Number.isFinite(t.ts) ? t.ts : (arr.length && arr[0].ts ? arr[0].ts - 1 : Date.now() - 1)
+        };
+        arr.unshift(root);
       }
-      if (Array.isArray(t.messages)) msgs.push(...t.messages);
-      msgs.sort((x,y)=> (x.ts||0) - (y.ts||0));
-      return { ...t, messages: msgs };
+
+      // Doplníme chybějící pole u zpráv a určitou heuristikou nastavíme role
+      for (const m of arr) {
+        m.text   = String(m.text ?? '');
+        m.author = String(m.author ?? (m.role === 'admin' ? 'admin' : (t.user || t.name || '')));
+        m.role   = (m.role === 'admin') ? 'admin' : 'user';
+        if (!Number.isFinite(m.ts)) m.ts = Date.now();
+      }
+
+      // Deduplikace (podle id || obsahového klíče)
+      const seen = new Set();
+      const out = [];
+      for (const m of arr){
+        const key = (m.id ? 'id:'+m.id : 'k:' + [m.role,m.author,m.text,m.ts].join('|'));
+        if (seen.has(key)) continue;
+        seen.add(key); out.push(m);
+      }
+
+      // Seřadíme podle času (stabilně)
+      out.sort((a,b)=> (a.ts||0) - (b.ts||0));
+
+      return { ...t, messages: out };
     }
 
+    // Ticket „patří“ přihlášenému uživateli:
+    // 1) explicitně user == email
+    // 2) jinak podle autora první bubliny (u starších ticketů bez t.user)
     function belongsToUser(t){
       if (t.user && eq(t.user, a.email)) return true;
-      // když chybí t.user, bereme vlastnictví podle první zprávy autora
       const first = (t.messages||[])[0];
       return first ? eq(first.author, a.email) : false;
     }
@@ -119,6 +149,7 @@
         return;
       }
 
+      // zachovat otevřené sekce mezi rerendery
       const opened = new Set(Array.from(myTicketsBox.querySelectorAll('details[open]')).map(d=>d.dataset.id));
 
       myTicketsBox.innerHTML = list.map(t => `
@@ -177,7 +208,7 @@
       });
     }
 
-    // ——— submit nového tiketu: rovnou se serverovou strukturou s messages[0] ———
+    // submit nového tiketu – rovnou s messages[0]
     document.getElementById('feedbackForm').addEventListener('submit', async e=>{
       e.preventDefault();
       const ts = Date.now();
