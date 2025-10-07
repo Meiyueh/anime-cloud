@@ -46,9 +46,9 @@
       <h2>Statistiky</h2>
       <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(180px,1fr)); gap: 12px;">
         <div class="card"><strong>Počet anime</strong><div id="stat-anime" class="muted">–</div></div>
-        <div class="card"><strong>Registrovaní uživatelé</strong><div id="stat-users" class="muted">–</div></div>
+        <div class="card"><strong>Registrovaní uživatelé (ověření)</strong><div id="stat-users" class="muted">–</div></div>
         <div class="card"><strong>Celkem uploadů</strong><div id="stat-uploads" class="muted">–</div></div>
-        <div class="card"><strong>Nejaktivnější anime</strong><div id="stat-top-anime" class="muted">–</div></div>
+        <div class="card"><strong>Top anime (podle dílů)</strong><div id="stat-top-anime" class="muted">–</div></div>
       </div>
     </div>
 
@@ -84,35 +84,40 @@
     App.initNavbar();
 
     const strip = (s)=> (s||'').toString().normalize('NFD').replace(/\p{Diacritic}/gu,'').toLowerCase();
-    const debounce = (fn,ms)=>{let t;return(...a)=>{clearTimeout(t);t=setTimeout(()=>fn(...a),ms)}};
+    const debounce = (fn,ms)=>{let t;return (...a)=>{clearTimeout(t);t=setTimeout(()=>fn(...a),ms)}};
 
     (async function(){
-      // anime.json (počet anime + katalog)
+      // 1) katalog z cloudu
       const anime = await App.fetchAnime(`${window.CLOUD_BASE}/data/anime.json`);
-
-      // /stats (uživatelé ověření, uploady a nejaktivnější slug)
-      let stats = { users_verified: 0, uploads_total: 0, top_anime: {slug:null, episodes_with_uploads:0} };
+      // 2) stats ze serveru
+      let stats = { users_verified: 0, uploads_total: 0, top_anime: null };
       try {
-        const r = await fetch(App.api('/stats'), { cache:'no-cache' });
-        const p = await r.json(); if (p && p.ok) stats = p;
+        const r = await fetch(App.api('/stats'));
+        const p = await r.json();
+        if (p?.ok) stats = p;
+      } catch {}
+
+      // 3) počty nahraných dílů per anime ze serveru
+      let countsByAnime = {};
+      try {
+        const r2 = await fetch(App.api('/uploads/counts'));
+        const p2 = await r2.json();
+        if (p2?.ok) countsByAnime = p2.by_anime || {};
       } catch {}
 
       // STATISTIKY
-      document.getElementById('stat-anime').textContent   = String(anime.length);
-      document.getElementById('stat-users').textContent   = String(stats.users_verified || 0);
+      document.getElementById('stat-anime').textContent = String(anime.length);
+      document.getElementById('stat-users').textContent = String(stats.users_verified || 0);
       document.getElementById('stat-uploads').textContent = String(stats.uploads_total || 0);
+      document.getElementById('stat-top-anime').textContent = stats.top_anime ? `${stats.top_anime.slug} — ${stats.top_anime.episodes_uploaded} dílů` : '—';
 
-      // najdi název top anime dle slug
-      let topText = '—';
-      if (stats.top_anime && stats.top_anime.slug){
-        const found = anime.find(a => a.slug === stats.top_anime.slug);
-        const title = found ? found.title : stats.top_anime.slug;
-        topText = `${title} — ${stats.top_anime.episodes_with_uploads} dílů s uploadem`;
-      }
-      document.getElementById('stat-top-anime').textContent = topText;
-
-      // seřadíme anime… (stejně jako dřív – klidně jednoduché podle názvu)
-      const sorted = anime.slice().sort((a,b)=> a.title.localeCompare(b.title, 'cs'));
+      // řazení: dle nahraných dílů desc, fallback titul
+      const sorted = anime.slice().sort((a,b)=>{
+        const ca = countsByAnime[a.slug] || 0;
+        const cb = countsByAnime[b.slug] || 0;
+        if (cb !== ca) return cb - ca;
+        return a.title.localeCompare(b.title, 'cs');
+      });
 
       // DOM refs
       const grid = document.getElementById('anime-grid');
@@ -130,22 +135,21 @@
       let page = 1;
       let filtered = sorted.slice();
 
+      function coverSrcFor(a){
+        const c = a.cover || '';
+        if (/^https?:\/\//.test(c)) return c;
+        if (c.startsWith('covers/')) return `${window.CLOUD_BASE}/${c}`;
+        return c || 'assets/logo.svg';
+      }
+
       function cardHTML(a){
-        const coverSrc = (() => {
-          const c = a.cover || '';
-          if (/^https?:\/\//.test(c)) return c;
-          if (c.startsWith('covers/')) return `${window.CLOUD_BASE}/${c}`;
-          if (!c) return 'assets/logo.svg';
-          return c;
-        })();
-        // Prosté info – nepočítáme lokální uploady, protože nyní bere statistiky server
+        const uploaded = countsByAnime[a.slug] || 0;
         return `
           <a href="#" class="card anime-card" data-slug="${a.slug}">
-            <img class="cover-tall" loading="lazy" src="${coverSrc}" alt="${a.title}" onerror="this.src='assets/logo.svg'">
+            <img class="cover-tall" loading="lazy" src="${coverSrcFor(a)}" alt="${a.title}" onerror="this.src='assets/logo.svg'">
             <div class="anime-title">${a.title}</div>
-            <div class="anime-meta">${a.episodes} dílů</div>
-          </a>
-        `;
+            <div class="anime-meta">${uploaded}/${a.episodes} dílů nahráno</div>
+          </a>`;
       }
 
       function renderTeaser(){
@@ -159,7 +163,6 @@
       }
 
       function totalPages(){ return Math.max(1, Math.ceil(filtered.length / pageSize)); }
-
       function renderPaged(){
         const start = (page-1)*pageSize;
         const slice = filtered.slice(start, start + pageSize);
@@ -187,16 +190,14 @@
       }
 
       renderTeaser();
-
       btnTeaserMore.addEventListener('click', ()=>{ mode='paged'; page=1; renderPaged(); });
       btnPrev.addEventListener('click', ()=>{ if (page>1){ page--; renderPaged(); }});
       btnNext.addEventListener('click', ()=>{ if (page<totalPages()){ page++; renderPaged(); }});
-
       const onSearch = debounce(()=>{
         const q = strip(searchInput.value);
         filtered = sorted.filter(a=>{
           if (!q) return true;
-          const hay = [a.title, (a.genres||[]).join(' '), a.studio, String(a.year)].map(strip).join(' ');
+          const hay = [a.title,(a.genres||[]).join(' '),a.studio,String(a.year)].map(strip).join(' ');
           return hay.includes(q);
         });
         page = 1;
@@ -208,4 +209,3 @@
   </script>
 </body>
 </html>
-
