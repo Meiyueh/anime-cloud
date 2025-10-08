@@ -288,6 +288,7 @@ class Handler(SimpleHTTPRequestHandler):
     def do_GET(self):
         try:
             parsed = urlparse(self.path)
+            if parsed.path == "/data/anime.json": return self.handle_anime_json()
             if parsed.path == "/auth/verify":    return self.handle_verify(parsed)
             if parsed.path == "/stats":          return self.handle_stats()
             if parsed.path == "/uploads/counts": return self.handle_upload_counts()
@@ -704,6 +705,17 @@ h1{{margin:0 0 10px}} .msg{{color:{color};line-height:1.6}} a{{color:#7c5cff}}</
             "top_anime": top_anime
         })
 
+    def handle_anime_json(self):
+        data = gcs_read_json(ANIME_JSON_CLOUD, []) or []
+        body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
     def handle_upload_counts(self):
         blobs = gcs_list("anime/")
         ep_by_anime = {}
@@ -837,6 +849,7 @@ if __name__ == "__main__":
         title = f"{slug} — {int(ep):02d} ({q})"
     
         return jsonify({'url': video_url, 'subtitles_url': subs_url, 'title': title})
+
 
 
 
