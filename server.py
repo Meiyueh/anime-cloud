@@ -347,8 +347,8 @@ class Handler(SimpleHTTPRequestHandler):
         }
         save_user(u)
 
-        base = os.getenv("PUBLIC_BASE_URL") or f"http://{self.headers.get('Host') or f'127.0.0.1:{PORT}'}"
-        verify_url = f"{base}/auth/verify?email={quote(email)}&token={quote(u['verify_token'])}"
+        host = self.headers.get("Host") or f"127.0.0.1:{PORT}"
+        verify_url = f"http://{host}/auth/verify?email={email}&token={u['verify_token']}"
         try: send_verification_email(email, verify_url)
         except Exception as e: print("[MAIL] send error:", e)
 
@@ -401,8 +401,8 @@ class Handler(SimpleHTTPRequestHandler):
         u["verify_token"] = gen_token()
         u["verify_expires"] = int(time.time()) + 60*60*48
         save_user(u)
-        base = os.getenv("PUBLIC_BASE_URL") or f"http://{self.headers.get('Host') or f'127.0.0.1:{PORT}'}"
-        verify_url = f"{base}/auth/verify?email={quote(email)}&token={quote(u['verify_token'])}"
+        host = self.headers.get("Host") or f"127.0.0.1:{PORT}"
+        verify_url = f"http://{host}/auth/verify?email={email}&token={u['verify_token']}"
         try: send_verification_email(email, verify_url)
         except Exception as e: print("[MAIL] send error:", e)
         return self._json(200, {"ok":True})
@@ -849,6 +849,7 @@ if __name__ == "__main__":
         title = f"{slug} — {int(ep):02d} ({q})"
     
         return jsonify({'url': video_url, 'subtitles_url': subs_url, 'title': title})
+
 
 
 
