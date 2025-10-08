@@ -410,17 +410,28 @@ class Handler(SimpleHTTPRequestHandler):
 
     def handle_verify(self, parsed):
         qs = parse_qs(parsed.query)
-        email = (qs.get("email",[""])[0]).strip().lower()
-        token = (qs.get("token",[""])[0]).strip()
+    
+        # helper: vytáhni hodnotu i když je klíč rozbitý jako "amp;token"
+        def qget(name, default=""):
+            if name in qs and qs[name]:
+                return qs[name][0]
+            for k,v in qs.items():
+                if k.endswith(name) and v:
+                    return v[0]
+            return default
+    
+        email = (qget("email", "").strip().lower())
+        token = (qget("token", "").strip())
+    
         u = load_user(email)
         if not u:
             return self._html(400, self._verify_page(False,"Ověření selhalo<br/>Neplatný odkaz nebo e-mail."))
     
-        # když už je účet ověřený, ukaž success (uživatel mohl kliknout starý odkaz)
+        # pokud už je ověřený, ber to jako success (uživatel mohl kliknout starý odkaz)
         if u.get("verified"):
             return self._html(200, self._verify_page(True,"Účet už byl ověřen ✅", redirect="/login.html", delay_ms=800))
     
-        if not token or token != u.get("verify_token"):
+        if not token or token != (u.get("verify_token") or ""):
             return self._html(400, self._verify_page(False,"Ověření selhalo<br/>Neplatný odkaz nebo token."))
     
         exp = int(u.get("verify_expires", 0))
@@ -859,6 +870,7 @@ if __name__ == "__main__":
         title = f"{slug} — {int(ep):02d} ({q})"
     
         return jsonify({'url': video_url, 'subtitles_url': subs_url, 'title': title})
+
 
 
 
