@@ -112,29 +112,31 @@ def gcs_signed_put_url(path: str, content_type: str, minutes: int = 30) -> str:
 # ===== Helpers =====
 TOKEN_INDEX_PREFIX = os.getenv("TOKEN_INDEX_PREFIX", "private/tokens").rstrip("/")
 
-def token_index_path(tok: str) -> str:
-    # tokeny generujeme urlsafe, takže stačí přímo
+def _token_index_path(tok:str) -> str:
     return f"{TOKEN_INDEX_PREFIX}/{tok}.json"
 
-def token_index_put(tok: str, email: str, exp: int):
-    """Uloží mapu token -> email (+ expirace) do GCS."""
-    rec = {"email": email, "exp": int(exp)}
-    gcs_write_json(token_index_path(tok), rec)
+def token_index_put(tok:str, email:str, exp:int):
+    rec = {"email": (email or "").lower(), "exp": int(exp or 0)}
+    gcs_write_json(_token_index_path(tok), rec)
 
-def token_index_get(tok: str):
-    """Vrátí dict {'email':..., 'exp':...} nebo None, pokud neexistuje/expirace uplynula."""
-    rec = gcs_read_json(token_index_path(tok), None)
-    if not rec: 
+def token_index_get(tok:str) -> str | None:
+    rec = gcs_read_json(_token_index_path(tok), None)
+    if not rec:
         return None
     try:
-        if int(rec.get("exp", 0)) and time.time() > int(rec["exp"]):
-            return None
+        exp = int(rec.get("exp") or 0)
+    except Exception:
+        exp = 0
+    if exp and time.time() > exp:
+        try: gcs_delete(_token_index_path(tok))
+        except Exception: pass
+        return None
+    return (rec.get("email") or "").lower() or None
+
+def token_index_delete(tok:str):
+    try: gcs_delete(_token_index_path(tok))
     except Exception:
         pass
-    return rec
-
-def token_index_delete(tok: str):
-    gcs_delete(token_index_path(tok))
 
 
 def now_iso():
@@ -387,29 +389,26 @@ class Handler(SimpleHTTPRequestHandler):
             "role": "user",
             "created_at": now_iso(),
             "verify_token": gen_token(),
-            "verify_expires": int(time.time()) + 60*60*48  # 48 h
+            "verify_expires": int(time.time()) + 60*60*48
         }
         save_user(u)
     
-        # index token -> email do GCS (aby ověření fungovalo jen podle ?t=)
-        tok = u["verify_token"]; exp = u["verify_expires"]
-        try:
-            token_index_put(tok, email, exp)
-        except Exception as e:
-            print("[TOKEN-INDEX] put failed:", e)
+        tok, exp = u["verify_token"], u["verify_expires"]
+        try: token_index_put(tok, email, exp)
+        except Exception as e: print("[TOKEN-INDEX] put failed:", e)
     
         base = (os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
                 or f"http://{self.headers.get('Host') or f'127.0.0.1:{PORT}'}")
         verify_url = f"{base}/auth/verify?t={tok}"
     
-        try:
-            send_verification_email(email, verify_url)
-        except Exception as e:
-            print("[MAIL] send error:", e)
+        if os.getenv("DEV_ECHO_VERIFICATION_LINK","false").lower() == "true":
+            print("[DEV] Verification link:", verify_url)
     
-        # pro snadné testování vracím i verify_url
+        try: send_verification_email(email, verify_url)
+        except Exception as e: print("[MAIL] send error:", e)
+    
         return self._json(200, {"ok": True, "verify_url": verify_url})
-
+    
     def handle_upload_sign(self):
         """
         Vrátí podepsané PUT URL pro video a volitelně titulky.
@@ -462,61 +461,55 @@ class Handler(SimpleHTTPRequestHandler):
         u["verify_expires"] = int(time.time()) + 60*60*48
         save_user(u)
     
-        tok = u["verify_token"]; exp = u["verify_expires"]
-        try:
-            token_index_put(tok, email, exp)
-        except Exception as e:
-            print("[TOKEN-INDEX] put failed:", e)
+        tok, exp = u["verify_token"], u["verify_expires"]
+        try: token_index_put(tok, email, exp)
+        except Exception as e: print("[TOKEN-INDEX] put failed:", e)
     
         base = (os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
                 or f"http://{self.headers.get('Host') or f'127.0.0.1:{PORT}'}")
         verify_url = f"{base}/auth/verify?t={tok}"
     
-        try:
-            send_verification_email(email, verify_url)
-        except Exception as e:
-            print("[MAIL] send error:", e)
+        try: send_verification_email(email, verify_url)
+        except Exception as e: print("[MAIL] send error:", e)
     
         return self._json(200, {"ok": True, "verify_url": verify_url})
 
     def handle_verify(self, parsed):
         qs = parse_qs(parsed.query)
-        t = (qs.get("t",[""])[0]).strip()
+        tok = (qs.get("t", [""])[0]).strip()
+        email_q = (qs.get("email", [""])[0]).strip().lower()
+        token_q = (qs.get("token", [""])[0]).strip()
     
-        # Preferuj nový styl s ?t=<token>
-        if t:
-            idx = token_index_get(t)
-            if not idx:
+        # 1) Preferuj nový ?t=token
+        if tok:
+            email = token_index_get(tok)
+            if not email:
                 return self._html(400, self._verify_page(False, "Ověření selhalo<br/>Neplatný nebo expirovaný token."))
-            email = (idx.get("email") or "").strip().lower()
-            u = load_user(email)
-            if not u or t != (u.get("verify_token") or ""):
-                return self._html(400, self._verify_page(False, "Ověření selhalo<br/>Token neodpovídá účtu."))
-            # OK – ověř
-            u["verified"] = True
-            u["verify_token"] = None
-            u["verify_expires"] = None
-            save_user(u)
-            token_index_delete(t)
-            return self._html(200, self._verify_page(True, "Účet ověřen ✅<br/>Nyní se můžeš přihlásit.", redirect="/login.html", delay_ms=1200))
+        # 2) fallback: starý tvar ?email=&token=
+        elif email_q and token_q:
+            email, tok = email_q, token_q
+        else:
+            return self._html(400, self._verify_page(False, "Ověření selhalo<br/>Chybí token."))
     
-        # Fallback: starý styl ?email=&token=
-        email = (qs.get("email",[""])[0]).strip().lower()
-        token = (qs.get("token",[""])[0]).strip()
         u = load_user(email)
-        if not u or not token or token != u.get("verify_token"):
-            return self._html(400, self._verify_page(False,"Ověření selhalo<br/>Neplatný odkaz nebo token."))
-        exp = int(u.get("verify_expires", 0))
+        if not u:
+            return self._html(400, self._verify_page(False, "Ověření selhalo<br/>Uživatel nenalezen."))
+    
+        # kontrola expirace v user záznamu (pokud je)
+        exp = int(u.get("verify_expires") or 0)
         if exp and time.time() > exp:
-            return self._html(400, self._verify_page(False,"Odkaz vypršel. Požádej o nový v aplikaci."))
+            return self._html(400, self._verify_page(False, "Odkaz vypršel. Požádej o nový v aplikaci."))
+    
+        # i když nesouhlasí u['verify_token'], pokud máme platný token index, ověříme
         u["verified"] = True
         u["verify_token"] = None
         u["verify_expires"] = None
         save_user(u)
-        # smaž i případný index, pokud existuje
-        try: token_index_delete(token)
-        except Exception: pass
-        return self._html(200, self._verify_page(True,"Účet ověřen ✅<br/>Nyní se můžeš přihlásit.", redirect="/login.html", delay_ms=1200))
+        token_index_delete(tok)
+        print(f"[VERIFY] {email} verified=True")
+    
+        return self._html(200, self._verify_page(
+            True, "Účet ověřen ✅<br/>Nyní se můžeš přihlásit.", redirect="/login.html", delay_ms=1200
     
     def _verify_page(self, ok:bool, msg:str, redirect:str=None, delay_ms:int=0)->str:
         meta = f'<meta http-equiv="refresh" content="{delay_ms/1000};url={redirect}">' if redirect else ""
@@ -944,6 +937,7 @@ if __name__ == "__main__":
         title = f"{slug} — {int(ep):02d} ({q})"
     
         return jsonify({'url': video_url, 'subtitles_url': subs_url, 'title': title})
+
 
 
 
