@@ -21,19 +21,19 @@ jobs:
           chmod 600 ~/.ssh/known_hosts
 
       - name: Rsync project to server
+        shell: bash
         run: |
-          RSYNC_FLAGS="-az --delete --info=NAME,STS"
-          EXCLUDES="
-            --exclude '.git/'
-            --exclude '.github/'
-            --exclude '.env'
-            --exclude 'gcs-key.json'
-            --exclude 'server.log'
-            --exclude 'outbox/'
-            --exclude 'last_email.eml'
-          "
-          rsync $RSYNC_FLAGS $EXCLUDES ./ \
-            ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${{ vars.REMOTE_DIR }}
+          set -euo pipefail
+          rsync -az --delete --info=NAME,STATS \
+            -e "ssh -p ${{ secrets.SSH_PORT }}" \
+            --exclude '.git/' \
+            --exclude '.github/' \
+            --exclude '.env' \
+            --exclude 'gcs-key.json' \
+            --exclude 'server.log' \
+            --exclude 'outbox/' \
+            --exclude 'last_email.eml' \
+            ./ "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${{ vars.REMOTE_DIR }}/"
 
       - name: Restart service & show status
         run: |
