@@ -1,70 +1,73 @@
-name: Deploy to Server
+name: Deploy to VPS
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   workflow_dispatch: {}
-
-concurrency:
-  group: deploy-production
-  cancel-in-progress: true
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
-      # (Volitelné, ale nevadí mít)
-      - name: Checkout (for context)
+      - name: Checkout (not strictly needed, but fine)
         uses: actions/checkout@v4
 
-      - name: Add server host key to known_hosts
-        run: |
-          set -e
-          mkdir -p ~/.ssh
-          PORT="${{ secrets.SSH_PORT || 22 }}"
-          ssh-keyscan -p "$PORT" -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts
-
+      # Hlavní deploy krok přes SSH
       - name: SSH to server and deploy
         uses: appleboy/ssh-action@v1.2.0
         with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_KEY }}
-          port: ${{ secrets.SSH_PORT || 22 }}
-          script_stop: true
+          host: ${{ secrets.SSH_HOST }}      # např. 80.211.223.9
+          username: ${{ secrets.SSH_USER }}  # např. root
+          key: ${{ secrets.SSH_KEY }}        # celý PRIVATE KEY = blok začínající "-----BEGIN OPENSSH PRIVATE KEY-----"
+          # port: ${{ secrets.SSH_PORT }}    # pokud nepoužíváš 22, odkomentuj a nastav secret
           script: |
             set -euo pipefail
-            WORKDIR="/root/anime-cloud"
-            VENV="/opt/animecloud/venv"
-            SERVICE="animecloud"
 
-            # --- FIX dubiózního vlastnictví repa ---
-            # (1) případně přenastaví vlastníka na root
-            chown -R root:root "$WORKDIR" || true
-            # (2) označí adresář jako bezpečný pro git
-            git config --global --add safe.directory "$WORKDIR" || true
-            # --------------------------------------
+            echo "==> Ensure repo ownership & git safe.directory"
+            chown -R root:root /root/anime-cloud || true
+            git config --global --add safe.directory /root/anime-cloud || true
 
-            echo "==> Git pull"
-            cd "$WORKDIR"
-            git fetch --prune origin main
+            echo "==> Pull latest code"
+            cd /root/anime-cloud
+            # Pokud repozitář někdy ztratí remote, přidej si ho trvale: git remote add origin https://github.com/Meiyueh/anime-cloud.git
+            git fetch --all
+            git checkout main || true
             git reset --hard origin/main
 
-            echo "==> Python venv & deps"
-            if [ ! -d "$VENV" ]; then python3 -m venv "$VENV"; fi
-            "$VENV/bin/pip" install -U pip
-            "$VENV/bin/pip" install -r requirements.txt
+            echo "==> Ensure Python venv & deps"
+            if [ ! -d /opt/animecloud/venv ]; then
+              mkdir -p /opt/animecloud/venv
+              python3 -m venv /opt/animecloud/venv
+            fi
+            /opt/animecloud/venv/bin/python -m pip install -U pip
+            /opt/animecloud/venv/bin/pip install -r requirements.txt
+
+            echo "==> Check secrets (.env) & GCS key"
+            if [ ! -f /root/anime-cloud/.env ]; then
+              echo "WARNING: /root/anime-cloud/.env is missing (SMTP apod.); continuing..."
+            fi
+            if [ ! -f /root/anime-cloud/gcs-key.json ]; then
+              echo "ERROR: /root/anime-cloud/gcs-key.json missing!"; exit 2
+            fi
+            chmod 600 /root/anime-cloud/gcs-key.json || true
 
             echo "==> Restart service"
             systemctl daemon-reload || true
-            systemctl restart "$SERVICE"
+            systemctl restart animecloud
 
             echo "==> Healthcheck"
-            for i in {1..10}; do
-              curl -fsS -I http://127.0.0.1:8080/index.html >/dev/null 2>&1 && { echo OK; break; }
-              echo "Waiting... ($i/10)"; sleep 2
+            ok=false
+            for i in {1..20}; do
+              if curl -fsS -I http://127.0.0.1:8080/index.html >/dev/null; then
+                ok=true; echo "Service is UP"; break
+              fi
+              echo "Waiting... ($i/20)"; sleep 2
             done
+            if [ "$ok" != true ]; then
+              echo "Service didn't start. Recent logs:"
+              journalctl -u animecloud -n 200 --no-pager || true
+              exit 7
+            fi
 
-            systemctl --no-pager --full status "$SERVICE" || true
-            journalctl -u "$SERVICE" -n 80 --no-pager || true
+            echo "==> Done"
