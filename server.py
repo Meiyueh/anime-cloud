@@ -23,6 +23,7 @@ load_env_dotfile(os.path.join(BASE_DIR, ".env"))
 # ===== Config =====
 PORT = int(os.getenv("PORT", "8080"))
 CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*")
+PUBLIC_BASE_URL = (os.getenv("PUBLIC_BASE_URL","").strip().rstrip("/"))
 
 GCS_BUCKET = os.getenv("GCS_BUCKET", "").strip()
 if not GCS_BUCKET:
@@ -347,8 +348,8 @@ class Handler(SimpleHTTPRequestHandler):
         }
         save_user(u)
 
-        host = self.headers.get("Host") or f"127.0.0.1:{PORT}"
-        verify_url = f"http://{host}/auth/verify?email={email}&token={u['verify_token']}"
+        base = PUBLIC_BASE_URL or f"http://{self.headers.get('Host') or f'127.0.0.1:{PORT}'}"
+        verify_url = f"{base}/auth/verify?email={quote(email)}&token={u['verify_token']}"
         try: send_verification_email(email, verify_url)
         except Exception as e: print("[MAIL] send error:", e)
 
@@ -401,8 +402,8 @@ class Handler(SimpleHTTPRequestHandler):
         u["verify_token"] = gen_token()
         u["verify_expires"] = int(time.time()) + 60*60*48
         save_user(u)
-        host = self.headers.get("Host") or f"127.0.0.1:{PORT}"
-        verify_url = f"http://{host}/auth/verify?email={email}&token={u['verify_token']}"
+        base = PUBLIC_BASE_URL or f"http://{self.headers.get('Host') or f'127.0.0.1:{PORT}'}"
+        verify_url = f"{base}/auth/verify?email={quote(email)}&token={u['verify_token']}"
         try: send_verification_email(email, verify_url)
         except Exception as e: print("[MAIL] send error:", e)
         return self._json(200, {"ok":True})
@@ -412,11 +413,20 @@ class Handler(SimpleHTTPRequestHandler):
         email = (qs.get("email",[""])[0]).strip().lower()
         token = (qs.get("token",[""])[0]).strip()
         u = load_user(email)
-        if not u or not token or token != u.get("verify_token"):
+        if not u:
             return self._html(400, self._verify_page(False,"Ověření selhalo<br/>Neplatný odkaz nebo e-mail."))
+    
+        # když už je účet ověřený, ukaž success (uživatel mohl kliknout starý odkaz)
+        if u.get("verified"):
+            return self._html(200, self._verify_page(True,"Účet už byl ověřen ✅", redirect="/login.html", delay_ms=800))
+    
+        if not token or token != u.get("verify_token"):
+            return self._html(400, self._verify_page(False,"Ověření selhalo<br/>Neplatný odkaz nebo token."))
+    
         exp = int(u.get("verify_expires", 0))
         if exp and time.time() > exp:
             return self._html(400, self._verify_page(False,"Odkaz vypršel. Požádej o nový v aplikaci."))
+    
         u["verified"] = True
         u["verify_token"] = None
         u["verify_expires"] = None
@@ -849,6 +859,7 @@ if __name__ == "__main__":
         title = f"{slug} — {int(ep):02d} ({q})"
     
         return jsonify({'url': video_url, 'subtitles_url': subs_url, 'title': title})
+
 
 
 
