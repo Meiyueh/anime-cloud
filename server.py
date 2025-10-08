@@ -122,6 +122,22 @@ def safe_name(name: str) -> str:
     name = "".join(ch for ch in name if ch.isalnum() or ch in keep)
     return name.replace("/", "").replace("\\", "").strip() or "file"
 
+def find_user_by_token(tok: str):
+    """Najde a vrátí (email, user_dict) podle verify_tokenu napříč private/users/ v GCS."""
+    if not tok:
+        return None, None
+    prefix = USERS_JSON_CLOUD.rstrip("/") + "/"
+    for b in gcs_list(prefix):
+        if not b.name.endswith(".json"):
+            continue
+        try:
+            u = json.loads(b.download_as_bytes().decode("utf-8"))
+        except Exception:
+            continue
+        if (u or {}).get("verify_token") == tok:
+            return u.get("email", "").lower(), u
+    return None, None
+    
 VIDEO_EXTS = (".mp4",".m4v",".webm",".mkv",".mov")
 SUBS_EXTS  = (".srt",".vtt")
 
@@ -431,39 +447,51 @@ class Handler(SimpleHTTPRequestHandler):
     def handle_verify(self, parsed):
         qs = parse_qs(parsed.query)
     
-        # malý helper: vrátí hodnotu pro "email"/"token" i když přijde jako "amp;token"
+        # vezmi hodnotu i když přijde jako "amp;token" apod.
         def qget(name, default=""):
             if name in qs and qs[name]:
                 return qs[name][0]
             for k, v in qs.items():
-                if k.endswith(name) and v:  # chytí "amp;token", "amp;amp;token", …
+                if k.endswith(name) and v:
                     return v[0]
             return default
     
-        email = qget("email", "").strip().lower()
-        token = qget("token", "").strip()
+        email = (qget("email", "") or "").strip().lower()
+        token = (qget("token", "") or "").strip()
     
-        # DEBUG: uvidíš klíče v journalu (pomáhá ověřit "amp;token")
-        print("[VERIFY] query_keys:", list(qs.keys()), "email:", email, "has_token:", bool(token))
+        # DEBUG – uvidíš v journalu co dorazilo
+        print("[VERIFY] keys:", list(qs.keys()), "email:", email, "has_token:", bool(token))
     
-        u = load_user(email)
+        u = load_user(email) if email else None
+    
+        # Když nesedí nebo email vůbec nepřišel, najdi podle tokenu
+        if not u or not token or token != (u.get("verify_token") or ""):
+            found_email, found_user = find_user_by_token(token)
+            if found_user:
+                email, u = found_email, found_user
+    
         if not u:
             return self._html(400, self._verify_page(False, "Ověření selhalo<br/>Neplatný odkaz nebo e-mail."))
     
+        # už ověřen
         if u.get("verified"):
             return self._html(200, self._verify_page(True, "Účet už byl ověřen ✅", redirect="/login.html", delay_ms=800))
     
+        # špatný/nesedící token
         if not token or token != (u.get("verify_token") or ""):
             return self._html(400, self._verify_page(False, "Ověření selhalo<br/>Neplatný odkaz nebo token."))
     
-        exp = int(u.get("verify_expires", 0))
+        # expirováno?
+        exp = int(u.get("verify_expires", 0) or 0)
         if exp and time.time() > exp:
             return self._html(400, self._verify_page(False, "Odkaz vypršel. Požádej o nový v aplikaci."))
     
+        # označ jako ověřeného
         u["verified"] = True
         u["verify_token"] = None
         u["verify_expires"] = None
         save_user(u)
+    
         return self._html(200, self._verify_page(True, "Účet ověřen ✅<br/>Nyní se můžeš přihlásit.", redirect="/login.html", delay_ms=1200))
     
     def _verify_page(self, ok:bool, msg:str, redirect:str=None, delay_ms:int=0)->str:
@@ -892,6 +920,7 @@ if __name__ == "__main__":
         title = f"{slug} — {int(ep):02d} ({q})"
     
         return jsonify({'url': video_url, 'subtitles_url': subs_url, 'title': title})
+
 
 
 
