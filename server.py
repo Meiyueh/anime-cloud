@@ -110,6 +110,33 @@ def gcs_signed_put_url(path: str, content_type: str, minutes: int = 30) -> str:
     return url
 
 # ===== Helpers =====
+TOKEN_INDEX_PREFIX = os.getenv("TOKEN_INDEX_PREFIX", "private/tokens").rstrip("/")
+
+def token_index_path(tok: str) -> str:
+    # tokeny generujeme urlsafe, takže stačí přímo
+    return f"{TOKEN_INDEX_PREFIX}/{tok}.json"
+
+def token_index_put(tok: str, email: str, exp: int):
+    """Uloží mapu token -> email (+ expirace) do GCS."""
+    rec = {"email": email, "exp": int(exp)}
+    gcs_write_json(token_index_path(tok), rec)
+
+def token_index_get(tok: str):
+    """Vrátí dict {'email':..., 'exp':...} nebo None, pokud neexistuje/expirace uplynula."""
+    rec = gcs_read_json(token_index_path(tok), None)
+    if not rec: 
+        return None
+    try:
+        if int(rec.get("exp", 0)) and time.time() > int(rec["exp"]):
+            return None
+    except Exception:
+        pass
+    return rec
+
+def token_index_delete(tok: str):
+    gcs_delete(token_index_path(tok))
+
+
 def now_iso():
     return datetime.datetime.utcnow().replace(microsecond=0).isoformat()+"Z"
 
@@ -274,23 +301,6 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_response(204); self.end_headers()
 
     # -- helpers
-    TOKEN_INDEX_PREFIX = os.getenv("TOKEN_INDEX_PREFIX", "private/tokens").rstrip("/")
-    
-    def token_index_path(tok: str) -> str:
-        return f"{TOKEN_INDEX_PREFIX}/{tok}.json"
-    
-    def token_index_put(tok: str, email: str, exp_ts: int):
-        rec = {"email": email, "exp": exp_ts, "created": now_iso()}
-        gcs_write_json(token_index_path(tok), rec)
-    
-    def token_index_get(tok: str):
-        return gcs_read_json(token_index_path(tok), default=None)
-    
-    def token_index_delete(tok: str):
-        if tok:
-            try: gcs_delete(token_index_path(tok))
-            except Exception: pass
-
     def _read_body(self):
         raw = self.rfile.read(int(self.headers.get("Content-Length","0") or 0))
         ctype = self.headers.get("Content-Type","")
@@ -361,16 +371,13 @@ class Handler(SimpleHTTPRequestHandler):
         p2 = (d.get("password2") or d.get("password_confirm") or d.get("confirm") or d.get("pass2") or p1).strip()
     
         if not email or not p1 or not p2:
-            return self._json(400, {"ok":False,"error":"missing_fields"})
+            return self._json(400, {"ok": False, "error": "missing_fields"})
         if p1 != p2:
-            return self._json(400, {"ok":False,"error":"password_mismatch"})
+            return self._json(400, {"ok": False, "error": "password_mismatch"})
         if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
-            return self._json(400, {"ok":False,"error":"invalid_email"})
+            return self._json(400, {"ok": False, "error": "invalid_email"})
         if load_user(email):
-            return self._json(409, {"ok":False,"error":"email_exists"})
-    
-        tok = gen_token()
-        exp = int(time.time()) + 60*60*48
+            return self._json(409, {"ok": False, "error": "email_exists"})
     
         u = {
             "email": email,
@@ -379,25 +386,28 @@ class Handler(SimpleHTTPRequestHandler):
             "verified": False,
             "role": "user",
             "created_at": now_iso(),
-            "verify_token": tok,
-            "verify_expires": exp,
+            "verify_token": gen_token(),
+            "verify_expires": int(time.time()) + 60*60*48  # 48 h
         }
         save_user(u)
     
-        # zapiš index token->email (pro rychlé dohledání při /auth/verify)
-        token_index_put(tok, email, exp)
+        # index token -> email do GCS (aby ověření fungovalo jen podle ?t=)
+        tok = u["verify_token"]; exp = u["verify_expires"]
+        try:
+            token_index_put(tok, email, exp)
+        except Exception as e:
+            print("[TOKEN-INDEX] put failed:", e)
     
-        base = os.getenv("PUBLIC_BASE_URL") or f"http://{self.headers.get('Host') or f'127.0.0.1:{PORT}'}"
+        base = (os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
+                or f"http://{self.headers.get('Host') or f'127.0.0.1:{PORT}'}")
         verify_url = f"{base}/auth/verify?t={tok}"
-        if DEV_ECHO_VERIFICATION_LINK:
-            print("[DEV] Verification link:", verify_url)
     
         try:
             send_verification_email(email, verify_url)
         except Exception as e:
             print("[MAIL] send error:", e)
     
-        # Pomůcka pro debuggování v CLI
+        # pro snadné testování vracím i verify_url
         return self._json(200, {"ok": True, "verify_url": verify_url})
 
     def handle_upload_sign(self):
@@ -441,66 +451,72 @@ class Handler(SimpleHTTPRequestHandler):
     def handle_resend(self):
         d = self._read_body()
         email = (d.get("email") or "").strip().lower()
-        u = load_user(email)
-        if not u: return self._json(404, {"ok":False,"error":"not_found"})
-        if u.get("verified"): return self._json(400, {"ok":False,"error":"already_verified"})
-    
-        # uklid starý index, když existuje
-        old = u.get("verify_token")
-        if old: token_index_delete(old)
-    
-        tok = gen_token()
-        exp = int(time.time()) + 60*60*48
-        u["verify_token"] = tok
-        u["verify_expires"] = exp
-        save_user(u)
-        token_index_put(tok, email, exp)
-    
-        base = os.getenv("PUBLIC_BASE_URL") or f"http://{self.headers.get('Host') or f'127.0.0.1:{PORT}'}"
-        verify_url = f"{base}/auth/verify?t={tok}"
-        if DEV_ECHO_VERIFICATION_LINK:
-            print("[DEV] Verification link:", verify_url)
-    
-        try: send_verification_email(email, verify_url)
-        except Exception as e: print("[MAIL] send error:", e)
-        return self._json(200, {"ok":True})
-
-    def handle_verify(self, parsed):
-        qs = parse_qs(parsed.query)
-        token = (qs.get("t", [""])[0] or qs.get("token", [""])[0]).strip()
-        email_param = (qs.get("email", [""])[0]).strip().lower()
-    
-        if not token:
-            return self._html(400, self._verify_page(False, "Chybí token."))
-    
-        # Primárně hledej přes index token->email
-        idx = token_index_get(token)
-        email = (idx or {}).get("email") or email_param
-    
-        if not email:
-            return self._html(400, self._verify_page(False, "Neplatný odkaz nebo token."))
     
         u = load_user(email)
         if not u:
-            return self._html(400, self._verify_page(False, "Účet nenalezen."))
+            return self._json(404, {"ok": False, "error": "not_found"})
+        if u.get("verified"):
+            return self._json(400, {"ok": False, "error": "already_verified"})
     
-        # Musí sedět aktuální token v uživateli (chrání proti starým odkazům)
-        if token != (u.get("verify_token") or ""):
-            return self._html(400, self._verify_page(False, "Neplatný odkaz nebo token."))
+        u["verify_token"] = gen_token()
+        u["verify_expires"] = int(time.time()) + 60*60*48
+        save_user(u)
     
-        exp = int(u.get("verify_expires") or 0)
+        tok = u["verify_token"]; exp = u["verify_expires"]
+        try:
+            token_index_put(tok, email, exp)
+        except Exception as e:
+            print("[TOKEN-INDEX] put failed:", e)
+    
+        base = (os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
+                or f"http://{self.headers.get('Host') or f'127.0.0.1:{PORT}'}")
+        verify_url = f"{base}/auth/verify?t={tok}"
+    
+        try:
+            send_verification_email(email, verify_url)
+        except Exception as e:
+            print("[MAIL] send error:", e)
+    
+        return self._json(200, {"ok": True, "verify_url": verify_url})
+
+    def handle_verify(self, parsed):
+        qs = parse_qs(parsed.query)
+        t = (qs.get("t",[""])[0]).strip()
+    
+        # Preferuj nový styl s ?t=<token>
+        if t:
+            idx = token_index_get(t)
+            if not idx:
+                return self._html(400, self._verify_page(False, "Ověření selhalo<br/>Neplatný nebo expirovaný token."))
+            email = (idx.get("email") or "").strip().lower()
+            u = load_user(email)
+            if not u or t != (u.get("verify_token") or ""):
+                return self._html(400, self._verify_page(False, "Ověření selhalo<br/>Token neodpovídá účtu."))
+            # OK – ověř
+            u["verified"] = True
+            u["verify_token"] = None
+            u["verify_expires"] = None
+            save_user(u)
+            token_index_delete(t)
+            return self._html(200, self._verify_page(True, "Účet ověřen ✅<br/>Nyní se můžeš přihlásit.", redirect="/login.html", delay_ms=1200))
+    
+        # Fallback: starý styl ?email=&token=
+        email = (qs.get("email",[""])[0]).strip().lower()
+        token = (qs.get("token",[""])[0]).strip()
+        u = load_user(email)
+        if not u or not token or token != u.get("verify_token"):
+            return self._html(400, self._verify_page(False,"Ověření selhalo<br/>Neplatný odkaz nebo token."))
+        exp = int(u.get("verify_expires", 0))
         if exp and time.time() > exp:
-            return self._html(400, self._verify_page(False, "Odkaz vypršel. Požádej o nový v aplikaci."))
-    
-        # OK → ověř a uklid index
+            return self._html(400, self._verify_page(False,"Odkaz vypršel. Požádej o nový v aplikaci."))
         u["verified"] = True
         u["verify_token"] = None
         u["verify_expires"] = None
         save_user(u)
+        # smaž i případný index, pokud existuje
         try: token_index_delete(token)
         except Exception: pass
-    
-        return self._html(200, self._verify_page(True, "Účet ověřen ✅<br/>Nyní se můžeš přihlásit.", redirect="/login.html", delay_ms=1200))
+        return self._html(200, self._verify_page(True,"Účet ověřen ✅<br/>Nyní se můžeš přihlásit.", redirect="/login.html", delay_ms=1200))
     
     def _verify_page(self, ok:bool, msg:str, redirect:str=None, delay_ms:int=0)->str:
         meta = f'<meta http-equiv="refresh" content="{delay_ms/1000};url={redirect}">' if redirect else ""
@@ -928,6 +944,7 @@ if __name__ == "__main__":
         title = f"{slug} — {int(ep):02d} ({q})"
     
         return jsonify({'url': video_url, 'subtitles_url': subs_url, 'title': title})
+
 
 
 
