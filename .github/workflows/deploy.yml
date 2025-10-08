@@ -1,4 +1,4 @@
-name: Deploy (rsync -> restart)
+name: Deploy (rsync -> restartt)
 
 on:
   push:
