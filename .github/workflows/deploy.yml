@@ -1,4 +1,4 @@
-name: Deploy (rsync -> restartt)
+name: Deploy
 
 on:
   push:
@@ -8,40 +8,26 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Write SSH key
+      - name: Add server to known_hosts
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_KEY }}" > ~/.ssh/animecloud_key
-          chmod 600 ~/.ssh/animecloud_key
+          ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Start ssh-agent and add key
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_KEY }}
 
       - name: Rsync files to server
         run: |
-          RSYNC_SSH="ssh -i ~/.ssh/animecloud_key -o StrictHostKeyChecking=no"
           rsync -az --delete \
-            -e "$RSYNC_SSH" \
-            --exclude ".git/" \
-            --exclude ".github/" \
-            --exclude ".env" \
-            --exclude "gcs-key.json" \
-            --exclude "server.log" \
-            --exclude "outbox/" \
-            --exclude "private/" \
-            --exclude "feedback/" \
-            ./  ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:/root/anime-cloud/
+            --exclude '.git' --exclude '.github' \
+            ./ ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:/root/anime-cloud/
 
-      - name: Restart service + healthcheck (on server)
+      - name: Restart service
         run: |
-          ssh -i ~/.ssh/animecloud_key -o StrictHostKeyChecking=no \
-            ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} <<'SSH'
-          set -euxo pipefail
-          systemctl daemon-reload || true
-          systemctl restart animecloud
-          systemctl --no-pager --full status animecloud | sed -n '1,50p' || true
-          # základní kontrola, že web běží lokálně na serveru
-          command -v curl >/dev/null 2>&1 && curl -fsS -I http://127.0.0.1:8080/index.html | sed -n '1,12p' || true
-          SSH
+          ssh ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
+            'systemctl restart animecloud && systemctl --no-pager --full status animecloud | sed -n "1,12p"'
