@@ -1,54 +1,47 @@
-name: Deploy to server
+name: Deploy (rsync -> restart)
 
 on:
   push:
-    branches: [ main ]
-  workflow_dispatch:
+    branches: [ "main" ]
+  workflow_dispatch: {}
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest  
-    steps:    
-      - name: Checkout
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Start ssh-agent with deploy key
-        uses: webfactory/ssh-agent@v0.9.0
-        with:      
-          ssh-private-key: ${{ secrets.SSH_KEY }}        
-
-      - name: Add server to known_hosts
+      - name: Write SSH key
         run: |
           mkdir -p ~/.ssh
-          ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
+          echo "${{ secrets.SSH_KEY }}" > ~/.ssh/animecloud_key
+          chmod 600 ~/.ssh/animecloud_key
 
-      - name: Rsync repo → server (/root/anime-cloud)       
+      - name: Rsync files to server
         run: |
-          rsync -avz --delete \
-            --exclude ".git*" \
-            --exclude ".github" \
-            --exclude "__pycache__" \
-            --exclude "last_email.eml" \
+          RSYNC_SSH="ssh -i ~/.ssh/animecloud_key -o StrictHostKeyChecking=no"
+          rsync -az --delete \
+            -e "$RSYNC_SSH" \
+            --exclude ".git/" \
+            --exclude ".github/" \
             --exclude ".env" \
             --exclude "gcs-key.json" \
-            ./ ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:/root/anime-cloud/         
-            
-      - name: Install deps & restart service
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_KEY }}
-          script: |
-            set -e
-            cd /root/anime-cloud
-            /opt/animecloud/venv/bin/pip install --upgrade pip
-            if [ -f requirements.txt ]; then
-              /opt/animecloud/venv/bin/pip install -r requirements.txt
-            else
-              /opt/animecloud/venv/bin/pip install --upgrade google-cloud-storage
-            fi
-            systemctl daemon-reload
-            systemctl restart animecloud
-            sleep 1
-            systemctl --no-pager --full status animecloud | tail -n +1 || true            
+            --exclude "server.log" \
+            --exclude "outbox/" \
+            --exclude "private/" \
+            --exclude "feedback/" \
+            ./  ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:/root/anime-cloud/
+
+      - name: Restart service + healthcheck (on server)
+        run: |
+          ssh -i ~/.ssh/animecloud_key -o StrictHostKeyChecking=no \
+            ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} <<'SSH'
+          set -euxo pipefail
+          systemctl daemon-reload || true
+          systemctl restart animecloud
+          systemctl --no-pager --full status animecloud | sed -n '1,50p' || true
+          # základní kontrola, že web běží lokálně na serveru
+          command -v curl >/dev/null 2>&1 && curl -fsS -I http://127.0.0.1:8080/index.html | sed -n '1,12p' || true
+          SSH
