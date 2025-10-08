@@ -1,50 +1,55 @@
-name: deploy
+name: Deploy to Forpsi
+
 on:
   push:
-    branches: [ main ]
+    branches: [ "main" ]
+  workflow_dispatch: {}
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Start ssh-agent
-        uses: webfactory/ssh-agent@v0.9.0
-        with:
-          ssh-private-key: ${{ secrets.SSH_KEY }}
-
-      - name: Add server to known_hosts
+      - name: Prepare known_hosts (avoid prompt)
         run: |
           mkdir -p ~/.ssh
-          ssh-keyscan -p "${{ secrets.SSH_PORT }}" "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/known_hosts
+          ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
 
-      - name: Rsync project to server
-        shell: bash
-        run: |
-          set -euo pipefail
-          rsync -az --delete --info=NAME,STATS \
-            -e "ssh -p ${{ secrets.SSH_PORT }}" \
-            --exclude '.git/' \
-            --exclude '.github/' \
-            --exclude '.env' \
-            --exclude 'gcs-key.json' \
-            --exclude 'server.log' \
-            --exclude 'outbox/' \
-            --exclude 'last_email.eml' \
-            ./ "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${{ vars.REMOTE_DIR }}/"
+      - name: SSH to server and deploy
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host:     ${{ secrets.SSH_HOST }}   # 80.211.223.9
+          username: ${{ secrets.SSH_USER }}   # root
+          key:      ${{ secrets.SSH_KEY }}    # privátní klíč pro přístup z Actions na server
+          script: |
+            set -euxo pipefail
 
-      - name: Restart service & show status
-        run: |
-          ssh -p "${{ secrets.SSH_PORT }}" "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" '
-            set -e
-            chown -R root:root /root/anime-cloud
+            # 1) připravit /root/.ssh/known_hosts pro GitHub (aby git fetch nechtěl potvrzení)
+            mkdir -p /root/.ssh
+            ssh-keyscan -H github.com >> /root/.ssh/known_hosts || true
+            chmod 700 /root/.ssh
+            chmod 600 /root/.ssh/known_hosts
+
+            # 2) repo – naklonovat pokud chybí, jinak fetch/reset na main
+            if [ ! -d /root/anime-cloud/.git ]; then
+              # nastav si URL repozitáře
+              git clone git@github.com:Meiyueh/anime-cloud.git /root/anime-cloud
+            fi
+
+            cd /root/anime-cloud
+            # pro jistotu přepnout na SSH URL (server používá svojí "deploy key")
+            git remote set-url origin git@github.com:Meiyueh/anime-cloud.git
+            git fetch origin main
+            git reset --hard origin/main
+
+            # 3) (volitelně) doinstaluj závislosti, pokud se requirements.txt změnil
+            if [ -f requirements.txt ]; then
+              /opt/animecloud/venv/bin/pip install -r requirements.txt
+            fi
+
+            # 4) restart služby
+            systemctl daemon-reload || true
             systemctl restart animecloud
-            systemctl --no-pager --full status animecloud || true
-          '
+            systemctl --no-pager --full status animecloud | sed -n '1,40p'
 
-      - name: Health check
-        run: |
-          ssh -p "${{ secrets.SSH_PORT }}" "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \
-            'curl -fsS -I http://127.0.0.1:8080/index.html | sed -n "1,12p"'
+            # 5) krátký health-check lokálně na serveru (běží přes 127.0.0.1, tj. obejde firewall/DNS)
+            curl -fsS -I http://127.0.0.1:8080/index.html | sed -n "1,12p" || true
