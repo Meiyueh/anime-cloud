@@ -510,6 +510,7 @@ class Handler(SimpleHTTPRequestHandler):
     
         return self._html(200, self._verify_page(
             True, "Účet ověřen ✅<br/>Nyní se můžeš přihlásit.", redirect="/login.html", delay_ms=1200
+        ))
     
     def _verify_page(self, ok:bool, msg:str, redirect:str=None, delay_ms:int=0)->str:
         meta = f'<meta http-equiv="refresh" content="{delay_ms/1000};url={redirect}">' if redirect else ""
@@ -937,6 +938,7 @@ if __name__ == "__main__":
         title = f"{slug} — {int(ep):02d} ({q})"
     
         return jsonify({'url': video_url, 'subtitles_url': subs_url, 'title': title})
+
 
 
 
