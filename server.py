@@ -350,10 +350,20 @@ class Handler(SimpleHTTPRequestHandler):
 
         base = PUBLIC_BASE_URL or f"http://{self.headers.get('Host') or f'127.0.0.1:{PORT}'}"
         verify_url = f"{base}/auth/verify?email={quote(email)}&token={u['verify_token']}"
-        try: send_verification_email(email, verify_url)
-        except Exception as e: print("[MAIL] send error:", e)
 
-        return self._json(200, {"ok":True})
+        # DEV: explicitně zaloguj a vrať link i v JSON
+        if DEV_ECHO_VERIFICATION_LINK:
+            print(f"[DEV] Verification link: {verify_url}")
+
+        try:
+            send_verification_email(email, verify_url)
+        except Exception as e:
+            print("[MAIL] send error:", e)
+
+        resp = {"ok": True}
+        if DEV_ECHO_VERIFICATION_LINK:
+            resp["verify_url"] = verify_url
+        return self._json(200, resp)
 
     def handle_upload_sign(self):
         """
@@ -404,18 +414,27 @@ class Handler(SimpleHTTPRequestHandler):
         save_user(u)
         base = PUBLIC_BASE_URL or f"http://{self.headers.get('Host') or f'127.0.0.1:{PORT}'}"
         verify_url = f"{base}/auth/verify?email={quote(email)}&token={u['verify_token']}"
-        try: send_verification_email(email, verify_url)
-        except Exception as e: print("[MAIL] send error:", e)
-        return self._json(200, {"ok":True})
+
+        if DEV_ECHO_VERIFICATION_LINK:
+            print(f"[DEV] Verification link: {verify_url}")
+
+        try:
+            send_verification_email(email, verify_url)
+        except Exception as e:
+            print("[MAIL] send error:", e)
+
+        resp = {"ok": True}
+        if DEV_ECHO_VERIFICATION_LINK:
+            resp["verify_url"] = verify_url
+        return self._json(200, resp)
 
     def handle_verify(self, parsed):
         qs = parse_qs(parsed.query)
     
-        # helper: vytáhni hodnotu i když je klíč rozbitý jako "amp;token"
         def qget(name, default=""):
             if name in qs and qs[name]:
                 return qs[name][0]
-            for k,v in qs.items():
+            for k, v in qs.items():
                 if k.endswith(name) and v:
                     return v[0]
             return default
@@ -427,7 +446,6 @@ class Handler(SimpleHTTPRequestHandler):
         if not u:
             return self._html(400, self._verify_page(False,"Ověření selhalo<br/>Neplatný odkaz nebo e-mail."))
     
-        # pokud už je ověřený, ber to jako success (uživatel mohl kliknout starý odkaz)
         if u.get("verified"):
             return self._html(200, self._verify_page(True,"Účet už byl ověřen ✅", redirect="/login.html", delay_ms=800))
     
@@ -870,6 +888,7 @@ if __name__ == "__main__":
         title = f"{slug} — {int(ep):02d} ({q})"
     
         return jsonify({'url': video_url, 'subtitles_url': subs_url, 'title': title})
+
 
 
 
