@@ -274,6 +274,23 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_response(204); self.end_headers()
 
     # -- helpers
+    TOKEN_INDEX_PREFIX = os.getenv("TOKEN_INDEX_PREFIX", "private/tokens").rstrip("/")
+    
+    def token_index_path(tok: str) -> str:
+        return f"{TOKEN_INDEX_PREFIX}/{tok}.json"
+    
+    def token_index_put(tok: str, email: str, exp_ts: int):
+        rec = {"email": email, "exp": exp_ts, "created": now_iso()}
+        gcs_write_json(token_index_path(tok), rec)
+    
+    def token_index_get(tok: str):
+        return gcs_read_json(token_index_path(tok), default=None)
+    
+    def token_index_delete(tok: str):
+        if tok:
+            try: gcs_delete(token_index_path(tok))
+            except Exception: pass
+
     def _read_body(self):
         raw = self.rfile.read(int(self.headers.get("Content-Length","0") or 0))
         ctype = self.headers.get("Content-Type","")
@@ -342,7 +359,7 @@ class Handler(SimpleHTTPRequestHandler):
         name  = (d.get("name") or email.split("@")[0]).strip()
         p1 = (d.get("password") or d.get("pass") or "").strip()
         p2 = (d.get("password2") or d.get("password_confirm") or d.get("confirm") or d.get("pass2") or p1).strip()
-
+    
         if not email or not p1 or not p2:
             return self._json(400, {"ok":False,"error":"missing_fields"})
         if p1 != p2:
@@ -351,7 +368,10 @@ class Handler(SimpleHTTPRequestHandler):
             return self._json(400, {"ok":False,"error":"invalid_email"})
         if load_user(email):
             return self._json(409, {"ok":False,"error":"email_exists"})
-
+    
+        tok = gen_token()
+        exp = int(time.time()) + 60*60*48
+    
         u = {
             "email": email,
             "name": name,
@@ -359,27 +379,26 @@ class Handler(SimpleHTTPRequestHandler):
             "verified": False,
             "role": "user",
             "created_at": now_iso(),
-            "verify_token": gen_token(),
-            "verify_expires": int(time.time()) + 60*60*48
+            "verify_token": tok,
+            "verify_expires": exp,
         }
         save_user(u)
-
-        base = PUBLIC_BASE_URL or f"http://{self.headers.get('Host') or f'127.0.0.1:{PORT}'}"
-        verify_url = f"{base}/auth/verify?email={quote(email)}&token={u['verify_token']}"
-
-        # DEV: explicitně zaloguj a vrať link i v JSON
+    
+        # zapiš index token->email (pro rychlé dohledání při /auth/verify)
+        token_index_put(tok, email, exp)
+    
+        base = os.getenv("PUBLIC_BASE_URL") or f"http://{self.headers.get('Host') or f'127.0.0.1:{PORT}'}"
+        verify_url = f"{base}/auth/verify?t={tok}"
         if DEV_ECHO_VERIFICATION_LINK:
-            print(f"[DEV] Verification link: {verify_url}")
-
+            print("[DEV] Verification link:", verify_url)
+    
         try:
             send_verification_email(email, verify_url)
         except Exception as e:
             print("[MAIL] send error:", e)
-
-        resp = {"ok": True}
-        if DEV_ECHO_VERIFICATION_LINK:
-            resp["verify_url"] = verify_url
-        return self._json(200, resp)
+    
+        # Pomůcka pro debuggování v CLI
+        return self._json(200, {"ok": True, "verify_url": verify_url})
 
     def handle_upload_sign(self):
         """
@@ -425,72 +444,61 @@ class Handler(SimpleHTTPRequestHandler):
         u = load_user(email)
         if not u: return self._json(404, {"ok":False,"error":"not_found"})
         if u.get("verified"): return self._json(400, {"ok":False,"error":"already_verified"})
-        u["verify_token"] = gen_token()
-        u["verify_expires"] = int(time.time()) + 60*60*48
+    
+        # uklid starý index, když existuje
+        old = u.get("verify_token")
+        if old: token_index_delete(old)
+    
+        tok = gen_token()
+        exp = int(time.time()) + 60*60*48
+        u["verify_token"] = tok
+        u["verify_expires"] = exp
         save_user(u)
-        base = PUBLIC_BASE_URL or f"http://{self.headers.get('Host') or f'127.0.0.1:{PORT}'}"
-        verify_url = f"{base}/auth/verify?email={quote(email)}&token={u['verify_token']}"
-
+        token_index_put(tok, email, exp)
+    
+        base = os.getenv("PUBLIC_BASE_URL") or f"http://{self.headers.get('Host') or f'127.0.0.1:{PORT}'}"
+        verify_url = f"{base}/auth/verify?t={tok}"
         if DEV_ECHO_VERIFICATION_LINK:
-            print(f"[DEV] Verification link: {verify_url}")
-
-        try:
-            send_verification_email(email, verify_url)
-        except Exception as e:
-            print("[MAIL] send error:", e)
-
-        resp = {"ok": True}
-        if DEV_ECHO_VERIFICATION_LINK:
-            resp["verify_url"] = verify_url
-        return self._json(200, resp)
+            print("[DEV] Verification link:", verify_url)
+    
+        try: send_verification_email(email, verify_url)
+        except Exception as e: print("[MAIL] send error:", e)
+        return self._json(200, {"ok":True})
 
     def handle_verify(self, parsed):
         qs = parse_qs(parsed.query)
+        token = (qs.get("t", [""])[0] or qs.get("token", [""])[0]).strip()
+        email_param = (qs.get("email", [""])[0]).strip().lower()
     
-        # vezmi hodnotu i když přijde jako "amp;token" apod.
-        def qget(name, default=""):
-            if name in qs and qs[name]:
-                return qs[name][0]
-            for k, v in qs.items():
-                if k.endswith(name) and v:
-                    return v[0]
-            return default
+        if not token:
+            return self._html(400, self._verify_page(False, "Chybí token."))
     
-        email = (qget("email", "") or "").strip().lower()
-        token = (qget("token", "") or "").strip()
+        # Primárně hledej přes index token->email
+        idx = token_index_get(token)
+        email = (idx or {}).get("email") or email_param
     
-        # DEBUG – uvidíš v journalu co dorazilo
-        print("[VERIFY] keys:", list(qs.keys()), "email:", email, "has_token:", bool(token))
+        if not email:
+            return self._html(400, self._verify_page(False, "Neplatný odkaz nebo token."))
     
-        u = load_user(email) if email else None
-    
-        # Když nesedí nebo email vůbec nepřišel, najdi podle tokenu
-        if not u or not token or token != (u.get("verify_token") or ""):
-            found_email, found_user = find_user_by_token(token)
-            if found_user:
-                email, u = found_email, found_user
-    
+        u = load_user(email)
         if not u:
-            return self._html(400, self._verify_page(False, "Ověření selhalo<br/>Neplatný odkaz nebo e-mail."))
+            return self._html(400, self._verify_page(False, "Účet nenalezen."))
     
-        # už ověřen
-        if u.get("verified"):
-            return self._html(200, self._verify_page(True, "Účet už byl ověřen ✅", redirect="/login.html", delay_ms=800))
+        # Musí sedět aktuální token v uživateli (chrání proti starým odkazům)
+        if token != (u.get("verify_token") or ""):
+            return self._html(400, self._verify_page(False, "Neplatný odkaz nebo token."))
     
-        # špatný/nesedící token
-        if not token or token != (u.get("verify_token") or ""):
-            return self._html(400, self._verify_page(False, "Ověření selhalo<br/>Neplatný odkaz nebo token."))
-    
-        # expirováno?
-        exp = int(u.get("verify_expires", 0) or 0)
+        exp = int(u.get("verify_expires") or 0)
         if exp and time.time() > exp:
             return self._html(400, self._verify_page(False, "Odkaz vypršel. Požádej o nový v aplikaci."))
     
-        # označ jako ověřeného
+        # OK → ověř a uklid index
         u["verified"] = True
         u["verify_token"] = None
         u["verify_expires"] = None
         save_user(u)
+        try: token_index_delete(token)
+        except Exception: pass
     
         return self._html(200, self._verify_page(True, "Účet ověřen ✅<br/>Nyní se můžeš přihlásit.", redirect="/login.html", delay_ms=1200))
     
@@ -920,6 +928,7 @@ if __name__ == "__main__":
         title = f"{slug} — {int(ep):02d} ({q})"
     
         return jsonify({'url': video_url, 'subtitles_url': subs_url, 'title': title})
+
 
 
 
