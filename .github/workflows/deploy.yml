@@ -1,55 +1,33 @@
-name: Deploy to server
+name: Deploy to VPS
 
 on:
   push:
-    branches: [ main ]
-  workflow_dispatch:
+    branches: [ main ]   # uprav si větev
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
+      - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Start ssh-agent with deploy key
+      - name: Start ssh-agent and add private key
         uses: webfactory/ssh-agent@v0.9.0
         with:
-          ssh-private-key: ${{ secrets.SSH_KEY }}
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
       - name: Add server to known_hosts
         run: |
           mkdir -p ~/.ssh
           ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
 
-      - name: Rsync repo → server (/root/anime-cloud)
+      - name: Rsync files to server
         run: |
-          rsync -avz --delete \
-            --exclude ".git*" \
-            --exclude ".github" \
-            --exclude "__pycache__" \
-            --exclude "last_email.eml" \
-            --exclude ".env" \
-            --exclude "gcs-key.json" \
-            ./ ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:/root/anime-cloud/
+          rsync -az --delete \
+            --exclude ".git/" --exclude ".github/" \
+            ./ ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${{ secrets.SSH_DEST || '/root/anime-cloud' }}/
 
-      - name: Install deps & restart service
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_KEY }}
-          script: |
-            set -e
-            cd /root/anime-cloud
-            /opt/animecloud/venv/bin/pip install --upgrade pip
-            if [ -f requirements.txt ]; then
-              /opt/animecloud/venv/bin/pip install -r requirements.txt
-            else
-              /opt/animecloud/venv/bin/pip install --upgrade google-cloud-storage
-            fi
-            systemctl daemon-reload
-            systemctl restart animecloud
-            sleep 1
-            systemctl --no-pager --full status animecloud | tail -n +1 || true
+      - name: Restart service
+        run: |
+          ssh -o StrictHostKeyChecking=yes ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
+            "systemctl restart animecloud && systemctl status --no-pager --lines=3 animecloud || true"
