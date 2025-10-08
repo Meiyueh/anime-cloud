@@ -1,21 +1,41 @@
-name: Deploy to Hetzner
+name: Deploy to server
 
 on:
   push:
-    branches: [ "main" ]
-  workflow_dispatch: {}  # možnost spustit ručně v Actions
+    branches: [ main ]
+  workflow_dispatch:
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Prepare known_hosts (avoid prompt)
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Start ssh-agent with deploy key
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_KEY }}
+
+      - name: Add server to known_hosts
         run: |
           mkdir -p ~/.ssh
           ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
 
-      - name: SSH to server and deploy
-        uses: appleboy/ssh-action@v1.2.0
+      - name: Rsync repo → server (/root/anime-cloud)
+        run: |
+          rsync -avz --delete \
+            --exclude ".git*" \
+            --exclude ".github" \
+            --exclude "__pycache__" \
+            --exclude "last_email.eml" \
+            --exclude ".env" \
+            --exclude "gcs-key.json" \
+            ./ ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:/root/anime-cloud/
+
+      - name: Install deps & restart service
+        uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
@@ -23,8 +43,13 @@ jobs:
           script: |
             set -e
             cd /root/anime-cloud
-            git fetch origin main
-            git reset --hard origin/main
-            systemctl daemon-reload || true
+            /opt/animecloud/venv/bin/pip install --upgrade pip
+            if [ -f requirements.txt ]; then
+              /opt/animecloud/venv/bin/pip install -r requirements.txt
+            else
+              /opt/animecloud/venv/bin/pip install --upgrade google-cloud-storage
+            fi
+            systemctl daemon-reload
             systemctl restart animecloud
-            systemctl --no-pager status animecloud
+            sleep 1
+            systemctl --no-pager --full status animecloud | tail -n +1 || true
