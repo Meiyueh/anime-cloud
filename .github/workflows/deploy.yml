@@ -2,11 +2,15 @@ name: Deploy to VPS
 
 on:
   push:
-    branches: [ main ]   # uprav si větev
+    branches: [ main ]   # uprav, pokud deployuješ z jiné větve
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    env:
+      SSH_HOST: ${{ secrets.SSH_HOST }}
+      SSH_USER: ${{ secrets.SSH_USER }}
+      SSH_DEST: ${{ secrets.SSH_DEST }}   # když nedefinuješ, použijeme /root/anime-cloud níž v shellu
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -19,15 +23,32 @@ jobs:
       - name: Add server to known_hosts
         run: |
           mkdir -p ~/.ssh
-          ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
+          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts
 
-      - name: Rsync files to server
+      - name: Show what will be sent (local tree)
         run: |
-          rsync -az --delete \
-            --exclude ".git/" --exclude ".github/" \
-            ./ ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${{ secrets.SSH_DEST || '/root/anime-cloud' }}/
+          echo "PWD=$(pwd)"
+          git status --porcelain || true
+          ls -la
+
+      - name: Rsync files to server (with verbose log)
+        run: |
+          set -euo pipefail
+          DEST="${SSH_DEST:-/root/anime-cloud}"   # <-- fallback tady, v shellu (správně)
+          echo "Deploying to $SSH_USER@$SSH_HOST:$DEST/"
+          # -a = archive, -v = verbose, -z = compression, --delete = smazat na cíli co v repu není
+          # --itemize-changes = vypíše, co přesně mění
+          rsync -avz --delete --itemize-changes \
+            --exclude ".git/" \
+            --exclude ".github/" \
+            ./ "$SSH_USER@$SSH_HOST:$DEST/"
+
+      - name: Verify files on server
+        run: |
+          DEST="${SSH_DEST:-/root/anime-cloud}"
+          ssh "$SSH_USER@$SSH_HOST" "echo 'Listing $DEST'; ls -la $DEST | sed -n '1,120p'"
 
       - name: Restart service
         run: |
-          ssh -o StrictHostKeyChecking=yes ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
-            "systemctl restart animecloud && systemctl status --no-pager --lines=3 animecloud || true"
+          ssh "$SSH_USER@$SSH_HOST" \
+            "sudo systemctl restart animecloud && sudo systemctl status --no-pager --lines=3 animecloud || true"
