@@ -431,37 +431,41 @@ class Handler(SimpleHTTPRequestHandler):
     def handle_verify(self, parsed):
         qs = parse_qs(parsed.query)
     
+        # malý helper: vrátí hodnotu pro "email"/"token" i když přijde jako "amp;token"
         def qget(name, default=""):
             if name in qs and qs[name]:
                 return qs[name][0]
             for k, v in qs.items():
-                if k.endswith(name) and v:
+                if k.endswith(name) and v:  # chytí "amp;token", "amp;amp;token", …
                     return v[0]
             return default
     
-        email = (qget("email", "").strip().lower())
-        token = (qget("token", "").strip())
+        email = qget("email", "").strip().lower()
+        token = qget("token", "").strip()
+    
+        # DEBUG: uvidíš klíče v journalu (pomáhá ověřit "amp;token")
+        print("[VERIFY] query_keys:", list(qs.keys()), "email:", email, "has_token:", bool(token))
     
         u = load_user(email)
         if not u:
-            return self._html(400, self._verify_page(False,"Ověření selhalo<br/>Neplatný odkaz nebo e-mail."))
+            return self._html(400, self._verify_page(False, "Ověření selhalo<br/>Neplatný odkaz nebo e-mail."))
     
         if u.get("verified"):
-            return self._html(200, self._verify_page(True,"Účet už byl ověřen ✅", redirect="/login.html", delay_ms=800))
+            return self._html(200, self._verify_page(True, "Účet už byl ověřen ✅", redirect="/login.html", delay_ms=800))
     
         if not token or token != (u.get("verify_token") or ""):
-            return self._html(400, self._verify_page(False,"Ověření selhalo<br/>Neplatný odkaz nebo token."))
+            return self._html(400, self._verify_page(False, "Ověření selhalo<br/>Neplatný odkaz nebo token."))
     
         exp = int(u.get("verify_expires", 0))
         if exp and time.time() > exp:
-            return self._html(400, self._verify_page(False,"Odkaz vypršel. Požádej o nový v aplikaci."))
+            return self._html(400, self._verify_page(False, "Odkaz vypršel. Požádej o nový v aplikaci."))
     
         u["verified"] = True
         u["verify_token"] = None
         u["verify_expires"] = None
         save_user(u)
-        return self._html(200, self._verify_page(True,"Účet ověřen ✅<br/>Nyní se můžeš přihlásit.", redirect="/login.html", delay_ms=1200))
-
+        return self._html(200, self._verify_page(True, "Účet ověřen ✅<br/>Nyní se můžeš přihlásit.", redirect="/login.html", delay_ms=1200))
+    
     def _verify_page(self, ok:bool, msg:str, redirect:str=None, delay_ms:int=0)->str:
         meta = f'<meta http-equiv="refresh" content="{delay_ms/1000};url={redirect}">' if redirect else ""
         js = f'<script>setTimeout(function(){{location.href="{redirect}";}}, {delay_ms});</script>' if redirect else ""
@@ -888,6 +892,7 @@ if __name__ == "__main__":
         title = f"{slug} — {int(ep):02d} ({q})"
     
         return jsonify({'url': video_url, 'subtitles_url': subs_url, 'title': title})
+
 
 
 
