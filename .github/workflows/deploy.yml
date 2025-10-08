@@ -1,30 +1,71 @@
-name: Deploy
+name: Deploy to Server
 
 on:
   push:
     branches: [ "main" ]
   workflow_dispatch: {}
 
+concurrency:
+  group: deploy-production
+  cancel-in-progress: true
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Prepare known_hosts
+      # (Volitelné, ale nevadí mít)
+      - name: Checkout (for context)
+        uses: actions/checkout@v4
+
+      - name: Add server host key to known_hosts
         run: |
+          set -e
           mkdir -p ~/.ssh
-          ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
+          PORT="${{ secrets.SSH_PORT || 22 }}"
+          ssh-keyscan -p "$PORT" -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts
 
       - name: SSH to server and deploy
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_KEY }}
+          key: ${{ secrets.SSH_KEY }}   # celý PRIVATE key (-----BEGIN OPENSSH PRIVATE KEY----- ... )
+          port: ${{ secrets.SSH_PORT || 22 }}
+          script_stop: true
           script: |
-            set -e
-            cd /root/anime-cloud
-            git fetch --all
+            set -euo pipefail
+
+            WORKDIR="/root/anime-cloud"
+            VENV="/opt/animecloud/venv"
+            SERVICE="animecloud"
+
+            echo "==> Git pull"
+            cd "$WORKDIR"
+            git fetch --prune origin main
             git reset --hard origin/main
+
+            echo "==> Python venv & deps"
+            if [ ! -d "$VENV" ]; then
+              python3 -m venv "$VENV"
+            fi
+            "$VENV/bin/pip" install -U pip
+            "$VENV/bin/pip" install -r requirements.txt
+
+            echo "==> Restart service"
             systemctl daemon-reload || true
-            systemctl restart animecloud
-            systemctl --no-pager --full status animecloud | sed -n '1,15p'
+            systemctl restart "$SERVICE"
+
+            echo "==> Healthcheck (localhost:8080)"
+            for i in {1..10}; do
+              if curl -fsS -I http://127.0.0.1:8080/index.html >/dev/null 2>&1; then
+                echo "OK"
+                break
+              fi
+              echo "Waiting... ($i/10)"
+              sleep 2
+            done
+
+            echo "==> Status & last logs"
+            systemctl --no-pager --full status "$SERVICE" || true
+            journalctl -u "$SERVICE" -n 80 --no-pager || true
