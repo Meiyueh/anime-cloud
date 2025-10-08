@@ -1,5 +1,4 @@
 name: deploy
-
 on:
   push:
     branches: [ main ]
@@ -7,10 +6,8 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Start ssh-agent
         uses: webfactory/ssh-agent@v0.9.0
@@ -47,7 +44,7 @@ jobs:
             systemctl --no-pager --full status animecloud || true
           '
 
-      - name: Health check (HTTP 200?)
+      - name: Health check
         run: |
           ssh -p "${{ secrets.SSH_PORT }}" "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \
             'curl -fsS -I http://127.0.0.1:8080/index.html | sed -n "1,12p"'
