@@ -1,54 +1,53 @@
-name: Deploy to VPS
+name: deploy
 
 on:
   push:
-    branches: [ main ]   # uprav, pokud deployuješ z jiné větve
+    branches: [ main ]
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    env:
-      SSH_HOST: ${{ secrets.SSH_HOST }}
-      SSH_USER: ${{ secrets.SSH_USER }}
-      SSH_DEST: ${{ secrets.SSH_DEST }}   # když nedefinuješ, použijeme /root/anime-cloud níž v shellu
+
     steps:
-      - name: Checkout repo
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Start ssh-agent and add private key
+      - name: Start ssh-agent
         uses: webfactory/ssh-agent@v0.9.0
         with:
-          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+          ssh-private-key: ${{ secrets.SSH_KEY }}
 
       - name: Add server to known_hosts
         run: |
           mkdir -p ~/.ssh
-          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts
+          ssh-keyscan -p "${{ secrets.SSH_PORT }}" "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
 
-      - name: Show what will be sent (local tree)
+      - name: Rsync project to server
         run: |
-          echo "PWD=$(pwd)"
-          git status --porcelain || true
-          ls -la
+          RSYNC_FLAGS="-az --delete --info=NAME,STS"
+          EXCLUDES="
+            --exclude '.git/'
+            --exclude '.github/'
+            --exclude '.env'
+            --exclude 'gcs-key.json'
+            --exclude 'server.log'
+            --exclude 'outbox/'
+            --exclude 'last_email.eml'
+          "
+          rsync $RSYNC_FLAGS $EXCLUDES ./ \
+            ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${{ vars.REMOTE_DIR }}
 
-      - name: Rsync files to server (with verbose log)
+      - name: Restart service & show status
         run: |
-          set -euo pipefail
-          DEST="${SSH_DEST:-/root/anime-cloud}"   # <-- fallback tady, v shellu (správně)
-          echo "Deploying to $SSH_USER@$SSH_HOST:$DEST/"
-          # -a = archive, -v = verbose, -z = compression, --delete = smazat na cíli co v repu není
-          # --itemize-changes = vypíše, co přesně mění
-          rsync -avz --delete --itemize-changes \
-            --exclude ".git/" \
-            --exclude ".github/" \
-            ./ "$SSH_USER@$SSH_HOST:$DEST/"
+          ssh -p "${{ secrets.SSH_PORT }}" "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" '
+            set -e
+            chown -R root:root /root/anime-cloud
+            systemctl restart animecloud
+            systemctl --no-pager --full status animecloud || true
+          '
 
-      - name: Verify files on server
+      - name: Health check (HTTP 200?)
         run: |
-          DEST="${SSH_DEST:-/root/anime-cloud}"
-          ssh "$SSH_USER@$SSH_HOST" "echo 'Listing $DEST'; ls -la $DEST | sed -n '1,120p'"
-
-      - name: Restart service
-        run: |
-          ssh "$SSH_USER@$SSH_HOST" \
-            "sudo systemctl restart animecloud && sudo systemctl status --no-pager --lines=3 animecloud || true"
+          ssh -p "${{ secrets.SSH_PORT }}" "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \
+            'curl -fsS -I http://127.0.0.1:8080/index.html | sed -n "1,12p"'
