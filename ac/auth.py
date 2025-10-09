@@ -114,7 +114,6 @@ def handle_register(h):
     if load_user(email):
         return h._json(409, {"ok": False, "error": "email_exists"})
 
-    # vytvoř záznam uživatele
     u = {
         "email": email,
         "name": name,
@@ -125,20 +124,33 @@ def handle_register(h):
         "verify_token": gen_token(),
         "verify_expires": int(time.time()) + 60*60*48,
     }
-    gen_user = save_user(u)  # může vrátit generation (pokud save_user vrací)
+    # save_user má ideálně vracet generation (viz naše předchozí úpravy gcs.py/save_user)
+    try:
+        gen_user = save_user(u)
+    except TypeError:
+        gen_user = None  # kdyby save_user nic nevracel
 
-    # index tokenu kvůli /auth/verify?t=...
+    # DEBUG po zápisu: znovu načteme a zalogujeme kontrolní info
+    try:
+        u2 = load_user(email)
+        print("[REGDBG]",
+              "email=", email,
+              "len_p1=", len(p1),
+              "len_p2=", len(p2),
+              "hash_prefix=", (u2.get("password_hash", "")[:30] if u2 else ""),
+              "users_root=", settings.USERS_JSON_CLOUD)
+    except Exception as e:
+        print("[REGDBG] ERROR:", e)
+
     tok, exp = u["verify_token"], u["verify_expires"]
     try:
         token_index_put(tok, email, exp)
     except Exception as e:
         print("[TOKEN-INDEX] put failed:", e)
 
-    # sestavení verify URL
     base = (settings.PUBLIC_BASE_URL or f"http://{h.headers.get('Host') or f'127.0.0.1:{settings.PORT}'}").rstrip("/")
     verify_url = f"{base}/auth/verify?t={tok}"
 
-    # odeslat e-mail
     try:
         send_verification_email(email, verify_url)
     except Exception as e:
@@ -148,6 +160,7 @@ def handle_register(h):
         print("[DEV] Verification link:", verify_url)
 
     return h._json(200, {"ok": True, "verify_url": verify_url, "gen": int(gen_user or 0)})
+
 
 def handle_verify(h, parsed):
     qs = parse_qs(parsed.query)
@@ -312,15 +325,14 @@ def handle_login(h):
     email = (d.get("email") or "").strip().lower()
     password = (d.get("password") or "").strip()
     if not email or not password:
-        return h._json(400, {"ok":False,"error":"missing_fields"})
+        return h._json(400, {"ok": False, "error": "missing_fields"})
 
     path = _user_path(email)
     u = load_user(email)
 
-    # DEBUG LOGS — přesně uvidíme, co server načetl
+    # DEBUG LOG – přesně ukáže, co jsme načetli a zda hash sedí
     try:
-        from .utils import verify_password as _v
-        pwd_ok = bool(u and _v(password, u.get("password_hash","")))
+        pwd_ok = bool(u and verify_password(password, u.get("password_hash", "")))
     except Exception:
         pwd_ok = False
     print("[LOGINDBG]",
@@ -328,17 +340,26 @@ def handle_login(h):
           "exists=", bool(u),
           "verified=", bool(u and u.get("verified")),
           "pwd_ok=", pwd_ok,
+          "len_pwd=", len(password),
+          "hash_prefix=", (u.get("password_hash", "")[:30] if u else ""),
           "USERS_JSON_CLOUD=", settings.USERS_JSON_CLOUD)
 
-    if not u or not verify_password(password, u.get("password_hash","")):
-        return h._json(403, {"ok":False,"error":"invalid_credentials"})
+    if not u or not verify_password(password, u.get("password_hash", "")):
+        return h._json(403, {"ok": False, "error": "invalid_credentials"})
     if not u.get("verified"):
-        return h._json(403, {"ok":False,"error":"not_verified"})
+        return h._json(403, {"ok": False, "error": "not_verified"})
 
     token = gen_token()
-    payload = {"email":u["email"],"name":u.get("name"),"role":u.get("role","user"),"profile":u.get("profile",{})}
-    if settings.DEBUG_AUTH: print("[AUTH] login ok", payload)
-    return h._json(200, {"ok":True, "user":payload, "token":token})
+    payload = {
+        "email": u["email"],
+        "name": u.get("name"),
+        "role": u.get("role", "user"),
+        "profile": u.get("profile", {})
+    }
+    if settings.DEBUG_AUTH:
+        print("[AUTH] login ok", payload)
+    return h._json(200, {"ok": True, "user": payload, "token": token})
+
 
 def bootstrap_admin_if_needed():
     if not (settings.ADMIN_BOOT_ENABLE and settings.ADMIN_EMAIL and settings.ADMIN_BOOT_PASSWORD): return
