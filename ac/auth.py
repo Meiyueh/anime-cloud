@@ -114,34 +114,47 @@ def handle_register(h):
     if load_user(email):
         return h._json(409, {"ok": False, "error": "email_exists"})
 
+    # 1) spočti hash a hned si ověř, že verify_password na něj vrátí True
+    new_hash = hash_password(p1)
+    try:
+        _selfcheck = verify_password(p1, new_hash)
+    except Exception:
+        _selfcheck = False
+    print("[REGDBG2] email=", email,
+          "len_pwd=", len(p1),
+          "new_hash_prefix=", new_hash[:30],
+          "selfcheck_ok=", _selfcheck)
+
+    # 2) ulož uživatele s tímto hashem
     u = {
         "email": email,
         "name": name,
-        "password_hash": hash_password(p1),
+        "password_hash": new_hash,
         "verified": False,
         "role": "user",
         "created_at": now_iso(),
         "verify_token": gen_token(),
         "verify_expires": int(time.time()) + 60*60*48,
     }
-    # save_user má ideálně vracet generation (viz naše předchozí úpravy gcs.py/save_user)
     try:
-        gen_user = save_user(u)
+        gen_user = save_user(u)  # měla by vracet generation z gcs.write_json
     except TypeError:
-        gen_user = None  # kdyby save_user nic nevracel
+        gen_user = None
 
-    # DEBUG po zápisu: znovu načteme a zalogujeme kontrolní info
+    # 3) přečti zpět přesně tuhle generaci a taky „latest“
     try:
-        u2 = load_user(email)
-        print("[REGDBG]",
-              "email=", email,
-              "len_p1=", len(p1),
-              "len_p2=", len(p2),
-              "hash_prefix=", (u2.get("password_hash", "")[:30] if u2 else ""),
+        pth = _user_path(email)
+        u_gen = gcs.read_json(pth, None, generation=gen_user) if gen_user else None
+        u_latest = gcs.read_json(pth, None)
+        print("[REGDBG2-READBACK]",
+              "gen=", gen_user,
+              "hash@gen_prefix=", (u_gen.get("password_hash","")[:30] if u_gen else None),
+              "hash@latest_prefix=", (u_latest.get("password_hash","")[:30] if u_latest else None),
               "users_root=", settings.USERS_JSON_CLOUD)
     except Exception as e:
-        print("[REGDBG] ERROR:", e)
+        print("[REGDBG2-READBACK] ERROR:", e)
 
+    # 4) index tokenu a mail jako dřív
     tok, exp = u["verify_token"], u["verify_expires"]
     try:
         token_index_put(tok, email, exp)
@@ -150,7 +163,6 @@ def handle_register(h):
 
     base = (settings.PUBLIC_BASE_URL or f"http://{h.headers.get('Host') or f'127.0.0.1:{settings.PORT}'}").rstrip("/")
     verify_url = f"{base}/auth/verify?t={tok}"
-
     try:
         send_verification_email(email, verify_url)
     except Exception as e:
@@ -160,7 +172,6 @@ def handle_register(h):
         print("[DEV] Verification link:", verify_url)
 
     return h._json(200, {"ok": True, "verify_url": verify_url, "gen": int(gen_user or 0)})
-
 
 def handle_verify(h, parsed):
     qs = parse_qs(parsed.query)
