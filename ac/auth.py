@@ -92,17 +92,21 @@ def send_verification_email(to_email: str, verify_url: str):
     logo_attached = False
     try:
         assets_dir = getattr(settings, "ASSETS_DIR", "assets")
-        default_logo = os.path.join(assets_dir, "logo.svg")
-        logo_path = getattr(settings, "EMAIL_LOGO_PATH", default_logo)
+        # 1) explicitní cesta z settings (doporučeno: assets/logo.png)
+        logo_path = getattr(settings, "EMAIL_LOGO_PATH", os.path.join(assets_dir, "logo.png"))
 
-        # když neexistuje SVG, zkus PNG
-        if not os.path.exists(logo_path):
-            png_try = os.path.join(assets_dir, "logo.png")
-            if os.path.exists(png_try):
-                logo_path = png_try
+        # 2) fallbacky: PNG -> SVG -> JPG
+        fallback_candidates = [
+            logo_path,
+            os.path.join(assets_dir, "logo.png"),
+            os.path.join(assets_dir, "logo.svg"),
+            os.path.join(assets_dir, "logo.jpg"),
+            os.path.join(assets_dir, "logo.jpeg"),
+        ]
+        chosen = next((p for p in fallback_candidates if os.path.exists(p)), None)
 
-        if os.path.exists(logo_path):
-            ext = os.path.splitext(logo_path)[1].lower()
+        if chosen:
+            ext = os.path.splitext(chosen)[1].lower()
             if ext == ".svg":
                 maintype, subtype = "image", "svg+xml"
             elif ext in (".png", ".jpg", ".jpeg", ".gif"):
@@ -111,15 +115,15 @@ def send_verification_email(to_email: str, verify_url: str):
                 maintype, subtype = "application", "octet-stream"
 
             part = MIMEBase(maintype, subtype)
-            with open(logo_path, "rb") as f:
+            with open(chosen, "rb") as f:
                 part.set_payload(f.read())
             encoders.encode_base64(part)
             part.add_header("Content-ID", f"<{cid_logo}>")
-            part.add_header("Content-Disposition", "inline", filename=os.path.basename(logo_path))
+            part.add_header("Content-Disposition", "inline", filename=os.path.basename(chosen))
             root.attach(part)
             logo_attached = True
         else:
-            print("[MAIL] logo file not found:", logo_path)
+            print("[MAIL] logo file not found in:", fallback_candidates)
     except Exception as e:
         print("[MAIL] logo attach skipped:", e)
 
@@ -155,8 +159,10 @@ def send_verification_email(to_email: str, verify_url: str):
         <table role="presentation" class="container" width="640" cellpadding="0" cellspacing="0" border="0" style="width:640px; max-width:100%;">
           <!-- Logo -->
           <tr>
-            <td align="center" style="padding:4px 8px 18px 8px;">
-              {('<img src="cid:' + cid_logo + '" alt="AnimeCloud" width="44" height="44" style="display:block; border-radius:50%; border:0;">') if logo_attached else '<div style="width:44px;height:44px;border-radius:50%;background:'+BRAND+';display:inline-block;"></div>'}
+            <td align="left" style="padding:0 8px 18px 8px;">
+              {('<img src="cid:' + cid_logo + '" alt="AnimeCloud" width="144" style="display:block;height:auto;border:0">')
+               if logo_attached else
+               '<div style="font:600 18px/1.2 system-ui,Segoe UI,Roboto;letter-spacing:.3px;color:#6b7280">AnimeCloud</div>'}
             </td>
           </tr>
 
