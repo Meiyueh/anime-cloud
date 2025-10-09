@@ -97,9 +97,7 @@ def gcs_list(prefix: str):
     return list(GCS.list_blobs(GCS_BUCKET, prefix=prefix))
 
 def gcs_signed_put_url(path: str, content_type: str, minutes: int = 30) -> str:
-    """
-    Vygeneruj V4 Signed URL pro přímý PUT upload na GCS.
-    """
+    """Vygeneruj V4 Signed URL pro přímý PUT upload na GCS."""
     blob = Bucket.blob(path)
     url = blob.generate_signed_url(
         version="v4",
@@ -109,8 +107,9 @@ def gcs_signed_put_url(path: str, content_type: str, minutes: int = 30) -> str:
     )
     return url
 
-# ===== Helpers =====
+# ===== Token index + verified marker v GCS =====
 TOKEN_INDEX_PREFIX = os.getenv("TOKEN_INDEX_PREFIX", "private/tokens").rstrip("/")
+VERIFIED_PREFIX    = os.getenv("VERIFIED_PREFIX",    "private/verified").rstrip("/")
 
 def _token_index_path(tok:str) -> str:
     return f"{TOKEN_INDEX_PREFIX}/{tok}.json"
@@ -121,12 +120,9 @@ def token_index_put(tok:str, email:str, exp:int):
 
 def token_index_get(tok:str) -> str | None:
     rec = gcs_read_json(_token_index_path(tok), None)
-    if not rec:
-        return None
-    try:
-        exp = int(rec.get("exp") or 0)
-    except Exception:
-        exp = 0
+    if not rec: return None
+    try: exp = int(rec.get("exp") or 0)
+    except Exception: exp = 0
     if exp and time.time() > exp:
         try: gcs_delete(_token_index_path(tok))
         except Exception: pass
@@ -135,12 +131,25 @@ def token_index_get(tok:str) -> str | None:
 
 def token_index_delete(tok:str):
     try: gcs_delete(_token_index_path(tok))
-    except Exception:
-        pass
+    except Exception: pass
 
+def _verified_path(email: str) -> str:
+    return f"{VERIFIED_PREFIX}/{email.lower()}.json"
 
+def verified_marker_set(email: str):
+    gcs_write_json(_verified_path(email), {
+        "email": email.lower(),
+        "verified": True,
+        "ts": datetime.datetime.now(datetime.UTC).replace(microsecond=0).isoformat()
+    })
+
+def verified_marker_exists(email: str) -> bool:
+    return Bucket.blob(_verified_path(email)).exists()
+
+# ===== Helpers =====
 def now_iso():
-    return datetime.datetime.utcnow().replace(microsecond=0).isoformat()+"Z"
+    # vyhneme se DeprecationWarning na utcnow()
+    return datetime.datetime.now(datetime.UTC).replace(microsecond=0).isoformat()
 
 def gen_token(nbytes=24)->str:
     return base64.urlsafe_b64encode(os.urandom(nbytes)).decode().rstrip("=")
@@ -151,22 +160,6 @@ def safe_name(name: str) -> str:
     name = "".join(ch for ch in name if ch.isalnum() or ch in keep)
     return name.replace("/", "").replace("\\", "").strip() or "file"
 
-def find_user_by_token(tok: str):
-    """Najde a vrátí (email, user_dict) podle verify_tokenu napříč private/users/ v GCS."""
-    if not tok:
-        return None, None
-    prefix = USERS_JSON_CLOUD.rstrip("/") + "/"
-    for b in gcs_list(prefix):
-        if not b.name.endswith(".json"):
-            continue
-        try:
-            u = json.loads(b.download_as_bytes().decode("utf-8"))
-        except Exception:
-            continue
-        if (u or {}).get("verify_token") == tok:
-            return u.get("email", "").lower(), u
-    return None, None
-    
 VIDEO_EXTS = (".mp4",".m4v",".webm",".mkv",".mov")
 SUBS_EXTS  = (".srt",".vtt")
 
@@ -183,7 +176,6 @@ def guess_mime(filename: str, sniff: bytes|None=None, default: str="application/
         if sniff.startswith(b"\x89PNG"): return "image/png"
         if sniff[:3] == b"\xff\xd8\xff": return "image/jpeg"
         if sniff.startswith(b"RIFF") and b"WEBP" in sniff[:16]: return "image/webp"
-        if sniff[:4] == b"\x1a\x45\xdf\xa3": return "video/x-matroska"
         if sniff[:4] == b"ftyp": return "video/mp4"
     return default
 
@@ -251,7 +243,7 @@ def parse_multipart_stream(handler):
                 out[key] = item.value
     return out
 
-# mail
+# ===== mail =====
 def send_verification_email(to_email:str, verify_url:str):
     if DEV_ECHO_VERIFICATION_LINK:
         print("[DEV] Verification link:", verify_url)
@@ -352,7 +344,7 @@ class Handler(SimpleHTTPRequestHandler):
             if parsed.path == "/auth/resend":        return self.handle_resend()
             if parsed.path == "/auth/update_profile":return self.handle_update_profile()
             if parsed.path == "/upload":             return self.handle_upload()
-            if parsed.path == "/upload/sign":         return self.handle_upload_sign()
+            if parsed.path == "/upload/sign":        return self.handle_upload_sign()
             if parsed.path == "/feedback":           return self.handle_feedback_save()
             if parsed.path == "/feedback/update":    return self.handle_feedback_update()
             if parsed.path == "/admin/add_anime":    return self.handle_add_anime()
@@ -371,7 +363,7 @@ class Handler(SimpleHTTPRequestHandler):
         name  = (d.get("name") or email.split("@")[0]).strip()
         p1 = (d.get("password") or d.get("pass") or "").strip()
         p2 = (d.get("password2") or d.get("password_confirm") or d.get("confirm") or d.get("pass2") or p1).strip()
-    
+
         if not email or not p1 or not p2:
             return self._json(400, {"ok": False, "error": "missing_fields"})
         if p1 != p2:
@@ -380,7 +372,7 @@ class Handler(SimpleHTTPRequestHandler):
             return self._json(400, {"ok": False, "error": "invalid_email"})
         if load_user(email):
             return self._json(409, {"ok": False, "error": "email_exists"})
-    
+
         u = {
             "email": email,
             "name": name,
@@ -392,86 +384,49 @@ class Handler(SimpleHTTPRequestHandler):
             "verify_expires": int(time.time()) + 60*60*48
         }
         save_user(u)
-    
+
         tok, exp = u["verify_token"], u["verify_expires"]
         try: token_index_put(tok, email, exp)
         except Exception as e: print("[TOKEN-INDEX] put failed:", e)
-    
-        base = (os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
-                or f"http://{self.headers.get('Host') or f'127.0.0.1:{PORT}'}")
+
+        base = (PUBLIC_BASE_URL or f"http://{self.headers.get('Host') or f'127.0.0.1:{PORT}'}")
         verify_url = f"{base}/auth/verify?t={tok}"
-    
-        if os.getenv("DEV_ECHO_VERIFICATION_LINK","false").lower() == "true":
+
+        if DEV_ECHO_VERIFICATION_LINK:
             print("[DEV] Verification link:", verify_url)
-    
+
         try: send_verification_email(email, verify_url)
         except Exception as e: print("[MAIL] send error:", e)
-    
+
         return self._json(200, {"ok": True, "verify_url": verify_url})
-    
-    def handle_upload_sign(self):
-        """
-        Vrátí podepsané PUT URL pro video a volitelně titulky.
-        Frontend pak nahrává přímo na GCS (CORS v bucketu je potřeba mít povolené).
-        """
-        d = self._read_body() or {}
-        anime   = (d.get("anime") or "").strip().lower()
-        episode = int(str(d.get("episode") or "0"))
-        quality = (d.get("quality") or "").strip()
-    
-        video_name = safe_name(d.get("videoName") or "")
-        video_type = d.get("videoType") or "video/mp4"
-        subs_name  = safe_name(d.get("subsName") or "") if d.get("subsName") else None
-        subs_type  = d.get("subsType") or "application/x-subrip"
-    
-        if not anime or not episode or not quality or not video_name:
-            return self._json(400, {"ok": False, "error": "missing_fields"})
-    
-        ep_folder = f"{int(episode):05d}"
-        video_path = f"anime/{anime}/{ep_folder}/{quality}/{video_name}"
-        subs_path  = f"anime/{anime}/{ep_folder}/{quality}/{subs_name}" if subs_name else None
-    
-        try:
-            v_signed = gcs_signed_put_url(video_path, video_type, minutes=60)
-            s_signed = gcs_signed_put_url(subs_path, subs_type, minutes=60) if subs_path else None
-            return self._json(200, {
-                "ok": True,
-                "video": {
-                    "put_url": v_signed,
-                    "public_url": gcs_public_url(video_path),
-                    "content_type": video_type
-                },
-                "subs": ({"put_url": s_signed, "public_url": gcs_public_url(subs_path), "content_type": subs_type} if s_signed else None)
-            })
-        except Exception as e:
-            # Vrátíme čitelnou chybu do FE (aby nepršelo jen 500 bez detailu)
-            return self._json(500, {"ok": False, "error": f"sign_failed: {e.__class__.__name__}: {e}"})
 
     def handle_resend(self):
         d = self._read_body()
         email = (d.get("email") or "").strip().lower()
-    
+
         u = load_user(email)
         if not u:
             return self._json(404, {"ok": False, "error": "not_found"})
         if u.get("verified"):
             return self._json(400, {"ok": False, "error": "already_verified"})
-    
+
         u["verify_token"] = gen_token()
         u["verify_expires"] = int(time.time()) + 60*60*48
         save_user(u)
-    
+
         tok, exp = u["verify_token"], u["verify_expires"]
         try: token_index_put(tok, email, exp)
         except Exception as e: print("[TOKEN-INDEX] put failed:", e)
-    
-        base = (os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
-                or f"http://{self.headers.get('Host') or f'127.0.0.1:{PORT}'}")
+
+        base = (PUBLIC_BASE_URL or f"http://{self.headers.get('Host') or f'127.0.0.1:{PORT}'}")
         verify_url = f"{base}/auth/verify?t={tok}"
-    
+
+        if DEV_ECHO_VERIFICATION_LINK:
+            print("[DEV] Verification link:", verify_url)
+
         try: send_verification_email(email, verify_url)
         except Exception as e: print("[MAIL] send error:", e)
-    
+
         return self._json(200, {"ok": True, "verify_url": verify_url})
 
     def handle_verify(self, parsed):
@@ -479,39 +434,42 @@ class Handler(SimpleHTTPRequestHandler):
         tok = (qs.get("t", [""])[0]).strip()
         email_q = (qs.get("email", [""])[0]).strip().lower()
         token_q = (qs.get("token", [""])[0]).strip()
-    
-        # 1) Preferuj nový ?t=token
+
+        # 1) nový tvar ?t=token -> dohledáme email v indexu
+        email = None
         if tok:
             email = token_index_get(tok)
             if not email:
                 return self._html(400, self._verify_page(False, "Ověření selhalo<br/>Neplatný nebo expirovaný token."))
-        # 2) fallback: starý tvar ?email=&token=
+        # 2) fallback: starý tvar ?email=&token= a kontrola shody s uloženým verify_token
         elif email_q and token_q:
+            u_tmp = load_user(email_q)
+            if not u_tmp or token_q != (u_tmp.get("verify_token") or ""):
+                return self._html(400, self._verify_page(False, "Ověření selhalo<br/>Neplatný odkaz nebo token."))
             email, tok = email_q, token_q
         else:
             return self._html(400, self._verify_page(False, "Ověření selhalo<br/>Chybí token."))
-    
+
         u = load_user(email)
         if not u:
             return self._html(400, self._verify_page(False, "Ověření selhalo<br/>Uživatel nenalezen."))
-    
-        # kontrola expirace v user záznamu (pokud je)
+
         exp = int(u.get("verify_expires") or 0)
         if exp and time.time() > exp:
             return self._html(400, self._verify_page(False, "Odkaz vypršel. Požádej o nový v aplikaci."))
-    
-        # i když nesouhlasí u['verify_token'], pokud máme platný token index, ověříme
+
         u["verified"] = True
         u["verify_token"] = None
         u["verify_expires"] = None
         save_user(u)
-        token_index_delete(tok)
+        verified_marker_set(email)
+        if tok: token_index_delete(tok)
         print(f"[VERIFY] {email} verified=True")
-    
+
         return self._html(200, self._verify_page(
             True, "Účet ověřen ✅<br/>Nyní se můžeš přihlásit.", redirect="/login.html", delay_ms=1200
         ))
-    
+
     def _verify_page(self, ok:bool, msg:str, redirect:str=None, delay_ms:int=0)->str:
         meta = f'<meta http-equiv="refresh" content="{delay_ms/1000};url={redirect}">' if redirect else ""
         js = f'<script>setTimeout(function(){{location.href="{redirect}";}}, {delay_ms});</script>' if redirect else ""
@@ -532,8 +490,21 @@ h1{{margin:0 0 10px}} .msg{{color:{color};line-height:1.6}} a{{color:#7c5cff}}</
         u = load_user(email)
         if not u or not verify_password(password, u.get("password_hash","")):
             return self._json(403, {"ok":False,"error":"invalid_credentials"})
+
+        # Fallback: pokud JSON ještě nemá verified:true, ale marker už existuje, oprav to a pusť dál.
         if not u.get("verified"):
-            return self._json(403, {"ok":False,"error":"not_verified"})
+            if verified_marker_exists(email):
+                u["verified"] = True
+                u["verify_token"] = None
+                u["verify_expires"] = None
+                try:
+                    save_user(u)
+                    print(f"[LOGIN-FIX] {email}: verified synchronized from marker")
+                except Exception as e:
+                    print(f"[LOGIN-FIX] save_user failed: {e}")
+            else:
+                return self._json(403, {"ok":False,"error":"not_verified"})
+
         token = gen_token()
         payload = {"email":u["email"],"name":u.get("name"),"role":u.get("role","user"),"profile":u.get("profile",{})}
         if DEBUG_AUTH: print("[AUTH] login ok", payload)
@@ -558,51 +529,39 @@ h1{{margin:0 0 10px}} .msg{{color:{color};line-height:1.6}} a{{color:#7c5cff}}</
 
     # ===== Uploads =====
     def handle_upload(self):
-        # očekáváme multipart/form-data
         ctype = self.headers.get("Content-Type", "")
         if not ctype.startswith("multipart/form-data"):
             return self._json(400, {"ok": False, "error": "expected_multipart"})
-    
-        # FieldStorage čte přímo ze socketu a spouluje na disk – vhodné pro velké soubory
-        env = {
-            "REQUEST_METHOD": "POST",
-            "CONTENT_TYPE": ctype,
-        }
-        form = cgi.FieldStorage(
-            fp=self.rfile,
-            headers=self.headers,
-            environ=env,
-            keep_blank_values=True
-        )
-    
+
+        env = {"REQUEST_METHOD": "POST","CONTENT_TYPE": ctype}
+        form = cgi.FieldStorage(fp=self.rfile, headers=self.headers, environ=env, keep_blank_values=True)
+
         anime   = (form.getfirst("anime", "") or "").strip().lower()
         episode = int(form.getfirst("episode", "0") or "0")
         quality = (form.getfirst("quality", "") or "").strip()
-    
+
         v_item  = form["video"] if "video" in form else None
         s_item  = form["subs"]  if "subs"  in form else None
-    
-        # názvy souborů (bezpečně + default přípony)
+
         vname = safe_name(form.getfirst("videoName", getattr(v_item, "filename", "video.mp4")) or "video.mp4")
         if "." not in vname: vname += ".mp4"
         sname = safe_name(form.getfirst("subsName", getattr(s_item, "filename", "subs.srt")) or "subs.srt")
-    
+
         if not anime or not episode or not quality or not v_item:
             return self._json(400, {"ok": False, "error": "missing_fields"})
-    
+
         ep_folder = f"{int(episode):05d}"
         v_mime = guess_mime(vname, default="video/mp4")
         s_mime = guess_mime(sname, default="application/x-subrip")
-    
+
         v_path = f"anime/{anime}/{ep_folder}/{quality}/{vname}"
         s_path = f"anime/{anime}/{ep_folder}/{quality}/{sname}"
-    
-        # upload videa (stream → GCS), FieldStorage drží .file otevřený => nepoužívej .read()
+
         v_blob = Bucket.blob(v_path)
         v_blob.cache_control = "public, max-age=31536000, immutable"
         v_file = v_item.file
         v_blob.upload_from_file(v_file, content_type=v_mime, rewind=True)
-    
+
         s_url = None
         if s_item:
             s_blob = Bucket.blob(s_path)
@@ -610,7 +569,7 @@ h1{{margin:0 0 10px}} .msg{{color:{color};line-height:1.6}} a{{color:#7c5cff}}</
             s_file = s_item.file
             s_blob.upload_from_file(s_file, content_type=s_mime, rewind=True)
             s_url = gcs_public_url(s_path)
-    
+
         return self._json(200, {"ok": True, "video": gcs_public_url(v_path), "subs": s_url})
 
     def handle_delete_file(self):
@@ -628,12 +587,10 @@ h1{{margin:0 0 10px}} .msg{{color:{color};line-height:1.6}} a{{color:#7c5cff}}</
 
     # ===== Feedback =====
     def _normalize_ticket(self, rec: dict) -> dict:
-        """Ujisti se, že ticket má messages[]. Pokud přišel jen 'message', převést na 1. položku vláka."""
         if not isinstance(rec, dict): return {}
         rec.setdefault("id", f"tkt_{int(time.time()*1000)}")
         rec.setdefault("status", "open")
         rec.setdefault("ts", int(time.time()*1000))
-        # uživatelská první zpráva
         if "messages" not in rec or not isinstance(rec["messages"], list) or not rec["messages"]:
             init_text = (rec.get("message") or "").strip()
             author = rec.get("user") or rec.get("name") or "anonym"
@@ -647,7 +604,6 @@ h1{{margin:0 0 10px}} .msg{{color:{color};line-height:1.6}} a{{color:#7c5cff}}</
                 }]
             else:
                 rec["messages"] = []
-        # nepotřebné pole už neschovávejme
         if "message" in rec: del rec["message"]
         return rec
 
@@ -668,7 +624,6 @@ h1{{margin:0 0 10px}} .msg{{color:{color};line-height:1.6}} a{{color:#7c5cff}}</
         if not cur: return self._json(404, {"ok":False,"error":"not_found"})
         cur = self._normalize_ticket(cur)
 
-        # append message (optional)
         msg = (d.get("message") or "").strip()
         if msg:
             cur.setdefault("messages", [])
@@ -679,7 +634,6 @@ h1{{margin:0 0 10px}} .msg{{color:{color};line-height:1.6}} a{{color:#7c5cff}}</
                 "text": msg,
                 "ts": int(time.time()*1000)
             })
-        # update status (optional)
         if d.get("status"):
             cur["status"] = d["status"]
 
@@ -708,7 +662,6 @@ h1{{margin:0 0 10px}} .msg{{color:{color};line-height:1.6}} a{{color:#7c5cff}}</
         slug = safe_name(str(d["slug"]).lower())
         cover_in = d.get("cover")
 
-        # cover: data URL → upload do covers/{slug}.ext
         if isinstance(cover_in, str) and cover_in.startswith("data:"):
             m = re.match(r"^data:(?P<mime>[\w/+.-]+);base64,(?P<b64>.*)$", cover_in, re.DOTALL)
             if not m: return self._json(400, {"ok":False,"error":"invalid_cover"})
@@ -719,6 +672,7 @@ h1{{margin:0 0 10px}} .msg{{color:{color};line-height:1.6}} a{{color:#7c5cff}}</
             cover_url = gcs_upload_bytes(cover_path, raw, mime, cache_immutable=True)
         else:
             cover_url = str(cover_in or "")
+            cover_path = cover_url  # může být prázdné
 
         try:
             item = {
@@ -727,7 +681,7 @@ h1{{margin:0 0 10px}} .msg{{color:{color};line-height:1.6}} a{{color:#7c5cff}}</
                 "episodes": int(d["episodes"]),
                 "genres": list(d["genres"]),
                 "description": str(d["description"]),
-                "cover": cover_url if cover_url.startswith("http") else cover_path if cover_url else "",
+                "cover": cover_url if (cover_url and cover_url.startswith("http")) else cover_path or "",
                 "status": str(d["status"]),
                 "year": int(d["year"]),
                 "studio": str(d["studio"]),
@@ -776,7 +730,6 @@ h1{{margin:0 0 10px}} .msg{{color:{color};line-height:1.6}} a{{color:#7c5cff}}</
             uploads_total += 1
             ep_by_anime[(slug, ep_folder)] = 1
 
-        # top anime podle unikátních epizod
         counts = {}
         for (slug, _ep) in ep_by_anime.keys():
             counts[slug] = counts.get(slug, 0) + 1
@@ -803,7 +756,6 @@ h1{{margin:0 0 10px}} .msg{{color:{color};line-height:1.6}} a{{color:#7c5cff}}</
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
-
 
     def handle_upload_counts(self):
         blobs = gcs_list("anime/")
@@ -856,100 +808,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-    # ===== KODI =====
-    @app.route('/catalog')
-    def catalog():
-        """
-        Vrátí list anime položek s episodes_count.
-        Bereme data/anime.json + GET /uploads/counts pro mapu epizod.
-        """
-        from google.cloud import storage
-        import json
-    
-        # načti anime.json (stejně jako to děláš jinde)
-        anime = load_json_from_gcs('data/anime.json')  # TODO: použij svůj helper
-        counts = get_upload_counts()                   # TODO: wrap k /uploads/counts logice nebo ji přímo zavolej
-    
-        out = []
-        for a in anime:
-            slug = a.get('slug')
-            cover_url = public_url_for(f"covers/{slug}.jpg")  # nebo .png/.webp, případně si to už ukládáš jako plnou URL
-            out.append({
-                'slug': slug,
-                'title': a.get('title'),
-                'genres': a.get('genres', []),
-                'year': a.get('year'),
-                'studio': a.get('studio'),
-                'plot': a.get('plot', ''),
-                'cover': cover_url,
-                'episodes_count': counts.get(slug, 0),
-            })
-        return jsonify(out)
-
-    @app.route('/stream/sign')
-    def stream_sign():
-        """
-        Vstup: slug, ep (00001), q (např. 1080p)
-        Najde první přehratelný soubor v anime/{slug}/{ep}/{q}/
-        Podepíše na GET a vrátí {url, subtitles_url?, title}
-        """
-        from google.cloud import storage
-        from google.cloud.storage.blob import Blob
-        import datetime
-    
-        slug = request.args.get('slug', '').strip()
-        ep   = request.args.get('ep', '').strip()      # očekáváme 00001 (5 znaků)
-        q    = request.args.get('q', '').strip()
-    
-        if not slug or not ep or not q:
-            return jsonify({'error': 'missing parameters'}), 400
-    
-        client = storage.Client()
-        bucket = client.bucket(GCS_BUCKET)  # použij svou konstantu
-    
-        prefix = f"anime/{slug}/{ep}/{q}/"
-        blobs  = list(client.list_blobs(GCS_BUCKET, prefix=prefix))
-    
-        # vyber video podle přípony (priorita .m3u8, .mp4, .mkv)
-        def pick(blobs, exts):
-            for ext in exts:
-                for b in blobs:
-                    if b.name.lower().endswith(ext):
-                        return b
-            return None
-    
-        video_blob = pick(blobs, ['.m3u8', '.mp4', '.mkv'])
-        if not video_blob:
-            return jsonify({'error': f'no media in {prefix}'}), 404
-    
-        # titulky (volitelné)
-        sub_blob = None
-        for b in blobs:
-            if b.name.lower().endswith('.srt'):
-                sub_blob = b
-                break
-    
-        expires = datetime.timedelta(hours=6)  # přehrávače si to během sezení stáhnou
-        video_url = video_blob.generate_signed_url(version='v4', expiration=expires, method='GET')
-        subs_url  = sub_blob.generate_signed_url(version='v4', expiration=expires, method='GET') if sub_blob else None
-    
-        # hezký název
-        title = f"{slug} — {int(ep):02d} ({q})"
-    
-        return jsonify({'url': video_url, 'subtitles_url': subs_url, 'title': title})
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
