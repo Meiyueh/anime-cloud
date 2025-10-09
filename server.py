@@ -400,6 +400,44 @@ class Handler(SimpleHTTPRequestHandler):
 
         return self._json(200, {"ok": True, "verify_url": verify_url})
 
+    def handle_upload_sign(self):
+        """
+        Vrátí podepsané PUT URL pro video a volitelně titulky.
+        Frontend pak nahrává přímo na GCS (CORS v bucketu je potřeba mít povolené).
+        """
+        d = self._read_body() or {}
+        anime   = (d.get("anime") or "").strip().lower()
+        episode = int(str(d.get("episode") or "0"))
+        quality = (d.get("quality") or "").strip()
+    
+        video_name = safe_name(d.get("videoName") or "")
+        video_type = d.get("videoType") or "video/mp4"
+        subs_name  = safe_name(d.get("subsName") or "") if d.get("subsName") else None
+        subs_type  = d.get("subsType") or "application/x-subrip"
+    
+        if not anime or not episode or not quality or not video_name:
+            return self._json(400, {"ok": False, "error": "missing_fields"})
+    
+        ep_folder = f"{int(episode):05d}"
+        video_path = f"anime/{anime}/{ep_folder}/{quality}/{video_name}"
+        subs_path  = f"anime/{anime}/{ep_folder}/{quality}/{subs_name}" if subs_name else None
+    
+        try:
+            v_signed = gcs_signed_put_url(video_path, video_type, minutes=60)
+            s_signed = gcs_signed_put_url(subs_path, subs_type, minutes=60) if subs_path else None
+            return self._json(200, {
+                "ok": True,
+                "video": {
+                    "put_url": v_signed,
+                    "public_url": gcs_public_url(video_path),
+                    "content_type": video_type
+                },
+                "subs": ({"put_url": s_signed, "public_url": gcs_public_url(subs_path), "content_type": subs_type} if s_signed else None)
+            })
+        except Exception as e:
+            # Vrátíme čitelnou chybu do FE (aby nepršelo jen 500 bez detailu)
+            return self._json(500, {"ok": False, "error": f"sign_failed: {e.__class__.__name__}: {e}"})
+            
     def handle_resend(self):
         d = self._read_body()
         email = (d.get("email") or "").strip().lower()
@@ -808,3 +846,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
