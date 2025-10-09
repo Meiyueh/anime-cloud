@@ -313,11 +313,28 @@ def handle_login(h):
     password = (d.get("password") or "").strip()
     if not email or not password:
         return h._json(400, {"ok":False,"error":"missing_fields"})
+
+    path = _user_path(email)
     u = load_user(email)
+
+    # DEBUG LOGS — přesně uvidíme, co server načetl
+    try:
+        from .utils import verify_password as _v
+        pwd_ok = bool(u and _v(password, u.get("password_hash","")))
+    except Exception:
+        pwd_ok = False
+    print("[LOGINDBG]",
+          "path=", path,
+          "exists=", bool(u),
+          "verified=", bool(u and u.get("verified")),
+          "pwd_ok=", pwd_ok,
+          "USERS_JSON_CLOUD=", settings.USERS_JSON_CLOUD)
+
     if not u or not verify_password(password, u.get("password_hash","")):
         return h._json(403, {"ok":False,"error":"invalid_credentials"})
     if not u.get("verified"):
         return h._json(403, {"ok":False,"error":"not_verified"})
+
     token = gen_token()
     payload = {"email":u["email"],"name":u.get("name"),"role":u.get("role","user"),"profile":u.get("profile",{})}
     if settings.DEBUG_AUTH: print("[AUTH] login ok", payload)
