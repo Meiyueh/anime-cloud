@@ -1,8 +1,6 @@
-import json, time, smtplib, os
+import json, time, smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from email.mime.base import MIMEBase
-from email import encoders
 from urllib.parse import parse_qs
 from . import settings, gcs
 from .utils import now_iso, gen_token, hash_password, verify_password, safe_name
@@ -59,107 +57,16 @@ def send_verification_email(to_email:str, verify_url:str):
     msg["From"] = settings.SMTP_FROM or settings.SMTP_USER or "no-reply@example.com"
     msg["To"] = to_email
     # Předmět
-    msg["Subject"] = "Potvrď e-mail a aktivuj účet • AnimeCloud"
+    msg["Subject"] = "Ověření účtu • AnimeCloud"
     
-    # Plain-text fallback
-    text = (
-        "Vítej v AnimeCloud!\n\n"
-        "Potvrď prosím svůj e-mail kliknutím na tento odkaz:\n"
-        f"{verify_url}\n\n"
-        "Pokud jsi o účet nežádal/a, tenhle e-mail ignoruj.\n"
-    )
-    
-    # Připravíme inline logo (CID). Pokusíme se načíst SVG z repo cesty.
-    cid_logo = "logo_ac"
-    _logo_attached = False
-    try:
-        assets_dir = getattr(settings, "ASSETS_DIR", "assets")
-        logo_path = getattr(settings, "EMAIL_LOGO_PATH", os.path.join(assets_dir, "logo.svg"))
-        with open(logo_path, "rb") as f:
-            part = MIMEBase("image", "svg+xml")
-            part.set_payload(f.read())
-        encoders.encode_base64(part)
-        part.add_header("Content-ID", f"<{cid_logo}>")
-        part.add_header("Content-Disposition", "inline", filename=os.path.basename(logo_path))
-        msg.attach(part)
-        _logo_attached = True
-    except Exception as e:
-        print("[MAIL] logo attach skipped:", e)
-    
-    # HTML verze (tabulky kvůli kompatibilitě; inline CSS; button funguje i v Outlooku)
-    html = f"""\
-    <!doctype html>
-    <html lang="cs">
-    <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width,initial-scale=1">
-    <title>Ověření účtu • AnimeCloud</title>
-    <style>
-      /* mobilní reset */
-      @media (max-width:600px) {{
-        .container {{ width: 100% !important; }}
-        .card {{ padding: 20px !important; }}
-        .btn a {{ display:block !important; }}
-      }}
-    </style>
-    </head>
-    <body style="margin:0;padding:0;background:#0e0e12;color:#fff;">
-      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#0e0e12;">
-        <tr>
-          <td align="center" style="padding:24px 12px;">
-            <table role="presentation" class="container" width="600" cellspacing="0" cellpadding="0" border="0" style="width:600px;max-width:100%;">
-              <tr>
-                <td align="left" style="padding:0 8px 18px 8px;">
-                  {"<img src=\"cid:" + cid_logo + "\" alt=\"AnimeCloud\" width=\"140\" style=\"display:block;height:auto;border:0\">" if _logo_attached else "<div style='font:600 18px/1.2 system-ui,Segoe UI,Roboto;letter-spacing:.3px;color:#cfcff5'>AnimeCloud</div>"}
-                </td>
-              </tr>
-              <tr>
-                <td class="card" style="background:#181820;border:1px solid #2a2a36;border-radius:16px;padding:28px;">
-                  <h1 style="margin:0 0 10px 0;font:700 22px/1.3 system-ui,Segoe UI,Roboto;color:#ffffff;">
-                    Vítej v AnimeCloud 👋
-                  </h1>
-                  <p style="margin:0 0 16px 0;font:400 15px/1.6 system-ui,Segoe UI,Roboto;color:#d7d7e6;">
-                    Potvrď prosím svůj e-mail kliknutím na tlačítko níže. Tím aktivuješ svůj účet.
-                  </p>
-    
-                  <!-- Bulletproof button (tabulka) -->
-                  <table role="presentation" cellspacing="0" cellpadding="0" border="0" class="btn" style="margin:18px 0 10px 0;">
-                    <tr>
-                      <td align="center" bgcolor="#7c5cff" style="border-radius:10px;">
-                        <a href="{verify_url}" target="_blank"
-                           style="font:600 15px/1 system-ui,Segoe UI,Roboto; color:#ffffff; text-decoration:none; padding:13px 18px; display:inline-block; border-radius:10px;">
-                          Ověřit účet
-                        </a>
-                      </td>
-                    </tr>
-                  </table>
-    
-                  <p style="margin:12px 0 0 0;font:400 13px/1.6 system-ui,Segoe UI,Roboto;color:#a9a9bf;word-break:break-all;">
-                    Pokud tlačítko nefunguje, zkopíruj tento odkaz do prohlížeče:<br>
-                    <a href="{verify_url}" style="color:#b6a7ff;text-decoration:underline;">{verify_url}</a>
-                  </p>
-    
-                  <hr style="border:0;border-top:1px solid #2a2a36;margin:22px 0;">
-                  <p style="margin:0;font:400 12px/1.6 system-ui,Segoe UI,Roboto;color:#9494ad;">
-                    Pokud jsi registraci nevyžadoval/a, můžeš tento e-mail ignorovat. Odkaz má časově omezenou platnost.
-                  </p>
-                </td>
-              </tr>
-              <tr>
-                <td align="center" style="padding:16px 8px 0 8px;color:#7c7c9a;font:400 12px/1.6 system-ui,Segoe UI,Roboto;">
-                  © {time.gmtime().tm_year} AnimeCloud
-                </td>
-              </tr>
-              <tr><td style="height:12px;">&nbsp;</td></tr>
-            </table>
-          </td>
-        </tr>
-      </table>
-    </body>
-    </html>
-    """
-    
-    # připojit části
+        text = f"Ověř svůj účet: {verify_url}\n"
+        html = (f'<div style="font-family:sans-serif;line-height:1.5">'
+                f'<h2>Vítej v AnimeCloud 👋</h2>'
+                f'<p>Potvrď prosím svůj e-mail kliknutím na tlačítko:</p>'
+                f'<p><a href="{verify_url}" '
+                f'style="background:#7c5cff;color:#fff;padding:10px 14px;border-radius:8px;text-decoration:none">Ověřit účet</a></p>'
+                f'<p>Pokud tlačítko nefunguje, použij tento odkaz: <a href="{verify_url}">{verify_url}</a></p>'
+                f'</div>')
     msg.attach(MIMEText(text, "plain", "utf-8"))
     msg.attach(MIMEText(html, "html", "utf-8"))
 
