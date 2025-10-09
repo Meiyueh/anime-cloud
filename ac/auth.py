@@ -96,6 +96,59 @@ h1{{margin:0 0 10px}} .msg{{color:{color};line-height:1.6}} a{{color:#7c5cff}}</
 <body><div class="card"><h1>Ověření účtu</h1><p class="msg">{msg}</p></div>{js}</body></html>"""
 
 # --- handlers ---
+def handle_register(h):
+    d = h._read_body()
+    email = (d.get("email") or "").strip().lower()
+    name  = (d.get("name") or email.split("@")[0]).strip()
+    p1 = (d.get("password") or d.get("pass") or "").strip()
+    p2 = (d.get("password2") or d.get("password_confirm") or d.get("confirm") or d.get("pass2") or p1).strip()
+
+    if not email or not p1 or not p2:
+        return h._json(400, {"ok": False, "error": "missing_fields"})
+
+    import re
+    if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+        return h._json(400, {"ok": False, "error": "invalid_email"})
+    if p1 != p2:
+        return h._json(400, {"ok": False, "error": "password_mismatch"})
+    if load_user(email):
+        return h._json(409, {"ok": False, "error": "email_exists"})
+
+    # vytvoř záznam uživatele
+    u = {
+        "email": email,
+        "name": name,
+        "password_hash": hash_password(p1),
+        "verified": False,
+        "role": "user",
+        "created_at": now_iso(),
+        "verify_token": gen_token(),
+        "verify_expires": int(time.time()) + 60*60*48,
+    }
+    gen_user = save_user(u)  # může vrátit generation (pokud save_user vrací)
+
+    # index tokenu kvůli /auth/verify?t=...
+    tok, exp = u["verify_token"], u["verify_expires"]
+    try:
+        token_index_put(tok, email, exp)
+    except Exception as e:
+        print("[TOKEN-INDEX] put failed:", e)
+
+    # sestavení verify URL
+    base = (settings.PUBLIC_BASE_URL or f"http://{h.headers.get('Host') or f'127.0.0.1:{settings.PORT}'}").rstrip("/")
+    verify_url = f"{base}/auth/verify?t={tok}"
+
+    # odeslat e-mail
+    try:
+        send_verification_email(email, verify_url)
+    except Exception as e:
+        print("[MAIL] send error:", e)
+
+    if settings.DEV_ECHO_VERIFICATION_LINK:
+        print("[DEV] Verification link:", verify_url)
+
+    return h._json(200, {"ok": True, "verify_url": verify_url, "gen": int(gen_user or 0)})
+
 def handle_verify(h, parsed):
     qs = parse_qs(parsed.query)
     tok = (qs.get("t", [""])[0]).strip()
