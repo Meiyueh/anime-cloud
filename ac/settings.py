@@ -42,3 +42,4 @@ DEV_ECHO_VERIFICATION_LINK = os.getenv("DEV_ECHO_VERIFICATION_LINK","false").low
 DEV_SAVE_LAST_EMAIL        = os.getenv("DEV_SAVE_LAST_EMAIL","false").lower()=="true"
 
 DEBUG_AUTH = os.getenv("DEBUG_AUTH","false").lower()=="true"
+EMAIL_LOGO_PATH = "assets/logo.png"
