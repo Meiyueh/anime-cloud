@@ -162,33 +162,67 @@ def handle_resend(h):
 
 def handle_verify(h, parsed):
     qs = parse_qs(parsed.query)
-    tok = (qs.get("t",[""])[0]).strip()
-    email = token_index_get(tok) if tok else None
+    tok = (qs.get("t", [""])[0]).strip()
+    email_from_index = token_index_get(tok) if tok else None
 
-    # fallback: starý tvar
-    if not email:
-        email_q = (qs.get("email",[""])[0]).strip().lower()
-        token_q = (qs.get("token",[""])[0]).strip()
-        if email_q and token_q:
-            email = email_q
-            tok = token_q
-        else:
-            return h._html(400, _verify_page(False,"Ověření selhalo<br/>Chybí token."))
+    # Fallback: starý tvar ?email=...&token=...
+    email_q = (qs.get("email", [""])[0]).strip().lower()
+    token_q = (qs.get("token", [""])[0]).strip()
+
+    if not (tok or (email_q and token_q)):
+        return h._html(400, _verify_page(False, "Ověření selhalo<br/>Chybí token."))
+
+    # Vyber email + token z toho, co reálně máme
+    email = (email_from_index or email_q or "").lower()
+    tok_effective = tok or token_q
 
     u = load_user(email)
-    if not u: return h._html(400, _verify_page(False,"Ověření selhalo<br/>Uživatel nenalezen."))
+    if not u:
+        return h._html(400, _verify_page(False, "Ověření selhalo<br/>Uživatel nenalezen."))
 
-    exp = int(u.get("verify_expires") or 0)
+    # Pokud už je účet ověřený, vrať přátelskou hlášku
+    if u.get("verified"):
+        return h._html(200, _verify_page(True, "Účet už byl ověřen ✅", redirect="/login.html", delay_ms=800))
+
+    # Kontrola expirace
+    try:
+        exp = int(u.get("verify_expires") or 0)
+    except Exception:
+        exp = 0
     if exp and time.time() > exp:
-        return h._html(400, _verify_page(False,"Odkaz vypršel. Požádej o nový v aplikaci."))
+        return h._html(400, _verify_page(False, "Odkaz vypršel. Požádej o nový v aplikaci."))
 
+    # Klíčové zpřísnění: akceptuj ověření, pokud (a) token index vrací tento email NEBO
+    # (b) token v URL je totožný s user.verify_token (bez ohledu na index).
+    stored_tok = (u.get("verify_token") or "").strip()
+    if email_from_index is None and tok_effective != stored_tok:
+        # Token index nezná token a zároveň nesedí s tím, co je u uživatele -> odmítnout
+        return h._html(400, _verify_page(False, "Token je neplatný. Požádej o nový ověřovací e-mail."))
+
+    # Proveď ověření a zneplatni token
     u["verified"] = True
+    u["verified_at"] = now_iso()
     u["verify_token"] = None
     u["verify_expires"] = None
     save_user(u)
-    token_index_delete(tok)
-    print(f"[VERIFY] {email} verified=True")
-    return h._html(200, _verify_page(True,"Účet ověřen ✅<br/>Nyní se můžeš přihlásit.", redirect="/login.html", delay_ms=1200))
+
+    # Pro jistotu smaž záznam z indexu (když existuje)
+    if tok_effective:
+        try: token_index_delete(tok_effective)
+        except Exception as e: print("[TOKEN-INDEX] delete failed:", e)
+
+    # Okamžitá read-after-write validace (odhalí špatný prefix/bucket nebo cache)
+    u_after = load_user(email)
+    if not (u_after and u_after.get("verified")):
+        print("[VERIFY] WARN: read-after-write mismatch for", email, "USERS_JSON_CLOUD=", settings.USERS_JSON_CLOUD)
+        return h._html(500, _verify_page(
+            False,
+            "Ověření proběhlo, ale uložení selhalo na úložišti. Zkus to za chvíli znovu nebo kontaktuj podporu."
+        ))
+
+    print(f"[VERIFY] {email} verified=True at {u_after.get('verified_at')}")
+    return h._html(200, _verify_page(True, "Účet ověřen ✅<br/>Nyní se můžeš přihlásit.", redirect="/login.html", delay_ms=1200))
+
 
 def handle_login(h):
     d = h._read_body()
