@@ -127,7 +127,7 @@ def send_verification_email(to_email: str, verify_url: str):
     except Exception as e:
         print("[MAIL] logo attach skipped:", e)
 
-    # ---------- HTML (světlý card layout jako v ukázce) ----------
+    # ---------- HTML (logo UVNITŘ karty, větší a s mezerou) ----------
     preheader = "Potvrď svůj e-mail a aktivuj účet AnimeCloud."
     html = f"""\
 <!doctype html>
@@ -138,13 +138,11 @@ def send_verification_email(to_email: str, verify_url: str):
 <meta name="color-scheme" content="light">
 <title>Ověření e-mailu • AnimeCloud</title>
 <style>
-  /* Mobile tweaks */
   @media (max-width:600px) {{
     .container {{ width:100% !important; }}
     .card {{ padding:22px !important; border-radius:14px !important; }}
     .btn a {{ display:block !important; }}
   }}
-  /* Outlook nebere web fonty – držíme se system-ui stacku */
 </style>
 </head>
 <body style="margin:0; padding:0; background:{BG}; color:{TEXT};">
@@ -157,27 +155,27 @@ def send_verification_email(to_email: str, verify_url: str):
     <tr>
       <td align="center" style="padding:32px 16px;">
         <table role="presentation" class="container" width="640" cellpadding="0" cellspacing="0" border="0" style="width:640px; max-width:100%;">
-          <!-- Logo -->
-          <tr>
-            <td align="left" style="padding:0 8px 18px 8px;">
-              {('<img src="cid:' + cid_logo + '" alt="AnimeCloud" width="144" style="display:block;height:auto;border:0">')
-               if logo_attached else
-               '<div style="font:600 18px/1.2 system-ui,Segoe UI,Roboto;letter-spacing:.3px;color:#6b7280">AnimeCloud</div>'}
-            </td>
-          </tr>
-
           <!-- Card -->
           <tr>
             <td class="card" align="center" style="background:{CARD_BG}; border:1px solid {BORDER}; border-radius:16px; padding:32px;">
-              <h1 style="margin:0 0 8px 0; font:700 22px/1.35 system-ui,Segoe UI,Roboto; color:{TEXT};">
+              
+              <!-- LOGO UVNITŘ KARTY (2× větší) -->
+              {('<img src="cid:' + cid_logo + '" alt="AnimeCloud" width="288" style="display:block; height:auto; border:0; margin:4px auto 18px auto;">')
+                if logo_attached else
+                '<div style="font:700 20px/1.2 system-ui,Segoe UI,Roboto; color:'+TEXT+'; margin:4px 0 18px 0;">AnimeCloud</div>'}
+
+              <!-- NADPIS -->
+              <h1 style="margin:6px 0 8px 0; font:800 22px/1.35 system-ui,Segoe UI,Roboto; color:{TEXT}; text-align:center;">
                 Ověř prosím svůj e-mail
               </h1>
-              <p style="margin:0 0 16px 0; font:400 14px/1.7 system-ui,Segoe UI,Roboto; color:{MUTED}; max-width:520px;">
+
+              <!-- LEAD TEXT -->
+              <p style="margin:0 0 16px 0; font:400 14px/1.7 system-ui,Segoe UI,Roboto; color:{MUTED}; max-width:520px; text-align:center;">
                 Poslali jsme tento ověřovací e-mail na <strong style="color:{TEXT};">{to_email}</strong>.
                 Kliknutím na tlačítko níže aktivuješ svůj účet. Odkaz vyprší za 48 hodin.
               </p>
 
-              <!-- Button (bulletproof) -->
+              <!-- BUTTON -->
               <table role="presentation" cellpadding="0" cellspacing="0" border="0" class="btn" style="margin:18px 0 10px 0;">
                 <tr>
                   <td align="center" bgcolor="{BRAND}" style="border-radius:10px;">
@@ -189,15 +187,15 @@ def send_verification_email(to_email: str, verify_url: str):
                 </tr>
               </table>
 
-              <!-- fallback link -->
-              <p style="margin:12px 0 0 0; font:400 12px/1.7 system-ui,Segoe UI,Roboto; color:{MUTED}; word-break:break-all; max-width:520px;">
+              <!-- FALLBACK LINK -->
+              <p style="margin:12px 0 0 0; font:400 12px/1.7 system-ui,Segoe UI,Roboto; color:{MUTED}; word-break:break-all; max-width:520px; text-align:center;">
                 Pokud tlačítko nefunguje, zkopíruj tento odkaz do prohlížeče:<br>
                 <a href="{verify_url}" style="color:{BRAND}; text-decoration:underline;">{verify_url}</a>
               </p>
             </td>
           </tr>
 
-          <!-- footer -->
+          <!-- FOOTER -->
           <tr>
             <td align="center" style="padding:18px 8px 0 8px; color:{MUTED}; font:400 12px/1.7 system-ui,Segoe UI,Roboto;">
               Pokud jsi registraci nevyžadoval/a, tento e-mail ignoruj.
