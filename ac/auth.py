@@ -14,7 +14,7 @@ def load_user(email:str):
     return gcs.read_json(_user_path(email), None)
 
 def save_user(u:dict):
-    gcs.write_json(_user_path(u["email"]), u)
+    return gcs.write_json(_user_path(u["email"]), u)
 
 # --- token index (aby verify fungovalo 1:1) ---
 def _token_index_path(tok:str)->str:
@@ -96,48 +96,78 @@ h1{{margin:0 0 10px}} .msg{{color:{color};line-height:1.6}} a{{color:#7c5cff}}</
 <body><div class="card"><h1>Ověření účtu</h1><p class="msg">{msg}</p></div>{js}</body></html>"""
 
 # --- handlers ---
-def handle_register(h):
-    d = h._read_body()
-    email = (d.get("email") or "").strip().lower()
-    name  = (d.get("name") or email.split("@")[0]).strip()
-    p1 = (d.get("password") or d.get("pass") or "").strip()
-    p2 = (d.get("password2") or d.get("password_confirm") or d.get("confirm") or d.get("pass2") or p1).strip()
+def handle_verify(h, parsed):
+    qs = parse_qs(parsed.query)
+    tok = (qs.get("t", [""])[0]).strip()
+    email_from_index = token_index_get(tok) if tok else None
 
-    if not email or not p1 or not p2:
-        return h._json(400, {"ok":False,"error":"missing_fields"})
-    import re
-    if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
-        return h._json(400, {"ok":False,"error":"invalid_email"})
-    if p1 != p2:
-        return h._json(400, {"ok":False,"error":"password_mismatch"})
-    if load_user(email):
-        return h._json(409, {"ok":False,"error":"email_exists"})
+    # Fallback: starý tvar ?email=...&token=...
+    email_q = (qs.get("email", [""])[0]).strip().lower()
+    token_q = (qs.get("token", [""])[0]).strip()
 
-    u = {
-        "email": email,
-        "name": name,
-        "password_hash": hash_password(p1),
-        "verified": False,
-        "role": "user",
-        "created_at": now_iso(),
-        "verify_token": gen_token(),
-        "verify_expires": int(time.time()) + 60*60*48,
-    }
-    save_user(u)
+    if not (tok or (email_q and token_q)):
+        return h._html(400, _verify_page(False, "Ověření selhalo<br/>Chybí token."))
 
-    tok, exp = u["verify_token"], u["verify_expires"]
-    try: token_index_put(tok, email, exp)
-    except Exception as e: print("[TOKEN-INDEX] put failed:", e)
+    # Vyber email + token z toho, co reálně máme
+    email = (email_from_index or email_q or "").lower()
+    tok_effective = tok or token_q
 
-    base = (settings.PUBLIC_BASE_URL or f"http://{h.headers.get('Host') or f'127.0.0.1:{settings.PORT}'}").rstrip("/")
-    verify_url = f"{base}/auth/verify?t={tok}"
+    u = load_user(email)
+    if not u:
+        return h._html(400, _verify_page(False, "Ověření selhalo<br/>Uživatel nenalezen."))
 
-    try: send_verification_email(email, verify_url)
-    except Exception as e: print("[MAIL] send error:", e)
+    # Už ověřený účet – přátelská odpověď
+    if u.get("verified"):
+        return h._html(200, _verify_page(True, "Účet už byl ověřen ✅", redirect="/login.html", delay_ms=800))
 
-    if settings.DEV_ECHO_VERIFICATION_LINK:
-        print("[DEV] Verification link:", verify_url)
-    return h._json(200, {"ok": True, "verify_url": verify_url})
+    # Expirace odkazu
+    try:
+        exp = int(u.get("verify_expires") or 0)
+    except Exception:
+        exp = 0
+    if exp and time.time() > exp:
+        return h._html(400, _verify_page(False, "Odkaz vypršel. Požádej o nový v aplikaci."))
+
+    # Přijmout, pokud (a) index vrací email NEBO (b) URL token = user.verify_token
+    stored_tok = (u.get("verify_token") or "").strip()
+    if email_from_index is None and tok_effective != stored_tok:
+        return h._html(400, _verify_page(False, "Token je neplatný. Požádej o nový ověřovací e-mail."))
+
+    # Zapiš ověření a zneplatni token
+    u["verified"] = True
+    u["verified_at"] = now_iso()
+    u["verify_token"] = None
+    u["verify_expires"] = None
+    gen = save_user(u)  # <- získáme generation nové verze objektu
+
+    # Smaž token z indexu (pokud existuje)
+    if tok_effective:
+        try:
+            token_index_delete(tok_effective)
+        except Exception as e:
+            print("[TOKEN-INDEX] delete failed:", e)
+
+    # Silná validace: načti přes přesnou generation
+    u_after = gcs.read_json(_user_path(email), None, generation=gen)
+
+    # Měkký retry (3× krátká pauza), kdyby 'latest' ještě nebyl k dispozici bez generation
+    if not (u_after and u_after.get("verified")):
+        for _ in range(3):
+            time.sleep(0.15)
+            u_after = gcs.read_json(_user_path(email), None)
+            if u_after and u_after.get("verified"):
+                break
+
+    if not (u_after and u_after.get("verified")):
+        print("[VERIFY] WARN: read-after-write mismatch for", email, "USERS_JSON_CLOUD=", settings.USERS_JSON_CLOUD, "gen=", gen)
+        return h._html(500, _verify_page(
+            False,
+            "Ověření proběhlo, ale uložení selhalo na úložišti. Zkus to za chvíli znovu nebo kontaktuj podporu."
+        ))
+
+    print(f"[VERIFY] {email} verified=True at {u_after.get('verified_at')}")
+    return h._html(200, _verify_page(True, "Účet ověřen ✅<br/>Nyní se můžeš přihlásit.", redirect="/login.html", delay_ms=1200))
+
 
 def handle_resend(h):
     d = h._read_body()
