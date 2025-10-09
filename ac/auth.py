@@ -50,6 +50,11 @@ def parse_body(raw:bytes, ctype:str):
 
 # --- email sender ---
 def send_verification_email(to_email: str, verify_url: str):
+    """
+    Elegantní, kompatibilní HTML e-mail (Outlook-friendly) + plain-text fallback.
+    Vložené (CID) logo: assets/logo.svg nebo assets/logo.png, případně settings.EMAIL_LOGO_PATH.
+    Barvy lze změnit přes settings.EMAIL_BRAND_COLOR / EMAIL_BG / EMAIL_CARD_BG / EMAIL_TEXT / EMAIL_MUTED.
+    """
     import os
     from email.mime.base import MIMEBase
     from email import encoders
@@ -57,31 +62,55 @@ def send_verification_email(to_email: str, verify_url: str):
     if settings.DEV_ECHO_VERIFICATION_LINK:
         print("[DEV] Verification link:", verify_url)
 
-    # ---- MIMEs: root=related, uvnitř alternative (text+html) ----
+    # ---------- barvy / vzhled (možno přetížit v settings) ----------
+    BRAND = getattr(settings, "EMAIL_BRAND_COLOR", "#7c5cff")
+    BG = getattr(settings, "EMAIL_BG", "#f5f7fb")
+    CARD_BG = getattr(settings, "EMAIL_CARD_BG", "#ffffff")
+    TEXT = getattr(settings, "EMAIL_TEXT", "#2b2f36")
+    MUTED = getattr(settings, "EMAIL_MUTED", "#6b7280")
+    BORDER = getattr(settings, "EMAIL_BORDER", "#e9eef5")
+
+    # ---------- MIME kostra: related -> alternative (text, html) ----------
     root = MIMEMultipart("related")
     root["From"] = settings.SMTP_FROM or settings.SMTP_USER or "no-reply@example.com"
     root["To"] = to_email
-    root["Subject"] = "Potvrď e-mail a aktivuj účet • AnimeCloud"
+    root["Subject"] = "Potvrď svůj e-mail • AnimeCloud"
 
     alt = MIMEMultipart("alternative")
     root.attach(alt)
 
-    # ---- Plain text fallback ----
+    # ---------- Plain-text fallback ----------
     text = (
         "Vítej v AnimeCloud!\n\n"
         "Potvrď prosím svůj e-mail kliknutím na tento odkaz:\n"
         f"{verify_url}\n\n"
-        "Pokud jsi o účet nežádal/a, tento e-mail ignoruj.\n"
+        "Odkaz platí 48 hodin. Pokud jsi registraci nevyžadoval/a, ignoruj tento e-mail.\n"
     )
 
-    # ---- Pokus o inline logo (SVG) přes CID ----
+    # ---------- Inline logo (CID) ----------
     cid_logo = "animecloud-logo"
     logo_attached = False
     try:
         assets_dir = getattr(settings, "ASSETS_DIR", "assets")
-        logo_path = getattr(settings, "EMAIL_LOGO_PATH", os.path.join(assets_dir, "logo.svg"))
+        default_logo = os.path.join(assets_dir, "logo.svg")
+        logo_path = getattr(settings, "EMAIL_LOGO_PATH", default_logo)
+
+        # když neexistuje SVG, zkus PNG
+        if not os.path.exists(logo_path):
+            png_try = os.path.join(assets_dir, "logo.png")
+            if os.path.exists(png_try):
+                logo_path = png_try
+
         if os.path.exists(logo_path):
-            part = MIMEBase("image", "svg+xml")
+            ext = os.path.splitext(logo_path)[1].lower()
+            if ext == ".svg":
+                maintype, subtype = "image", "svg+xml"
+            elif ext in (".png", ".jpg", ".jpeg", ".gif"):
+                maintype, subtype = "image", ext.lstrip(".")
+            else:
+                maintype, subtype = "application", "octet-stream"
+
+            part = MIMEBase(maintype, subtype)
             with open(logo_path, "rb") as f:
                 part.set_payload(f.read())
             encoders.encode_base64(part)
@@ -89,72 +118,87 @@ def send_verification_email(to_email: str, verify_url: str):
             part.add_header("Content-Disposition", "inline", filename=os.path.basename(logo_path))
             root.attach(part)
             logo_attached = True
+        else:
+            print("[MAIL] logo file not found:", logo_path)
     except Exception as e:
         print("[MAIL] logo attach skipped:", e)
 
-    # ---- HTML verze (responzivní, „bulletproof“ tlačítko) ----
+    # ---------- HTML (světlý card layout jako v ukázce) ----------
+    preheader = "Potvrď svůj e-mail a aktivuj účet AnimeCloud."
     html = f"""\
 <!doctype html>
 <html lang="cs">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Ověření účtu • AnimeCloud</title>
+<meta name="color-scheme" content="light">
+<title>Ověření e-mailu • AnimeCloud</title>
 <style>
-@media (max-width:600px) {{
-  .container {{ width:100% !important; }}
-  .card {{ padding:20px !important; }}
-  .btn a {{ display:block !important; }}
-}}
+  /* Mobile tweaks */
+  @media (max-width:600px) {{
+    .container {{ width:100% !important; }}
+    .card {{ padding:22px !important; border-radius:14px !important; }}
+    .btn a {{ display:block !important; }}
+  }}
+  /* Outlook nebere web fonty – držíme se system-ui stacku */
 </style>
 </head>
-<body style="margin:0;padding:0;background:#0e0e12;color:#fff;">
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#0e0e12;">
+<body style="margin:0; padding:0; background:{BG}; color:{TEXT};">
+  <!-- skrytý preheader -->
+  <div style="display:none; max-height:0; overflow:hidden; opacity:0; visibility:hidden;">
+    {preheader}
+  </div>
+
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:{BG};">
     <tr>
-      <td align="center" style="padding:24px 12px;">
-        <table role="presentation" class="container" width="600" cellpadding="0" cellspacing="0" border="0" style="width:600px;max-width:100%;">
+      <td align="center" style="padding:32px 16px;">
+        <table role="presentation" class="container" width="640" cellpadding="0" cellspacing="0" border="0" style="width:640px; max-width:100%;">
+          <!-- Logo -->
           <tr>
-            <td align="left" style="padding:0 8px 18px 8px;">
-              {('<img src="cid:' + cid_logo + '" alt="AnimeCloud" width="140" style="display:block;height:auto;border:0">') if logo_attached else '<div style="font:600 18px/1.2 system-ui,Segoe UI,Roboto;letter-spacing:.3px;color:#cfcff5">AnimeCloud</div>'}
+            <td align="center" style="padding:4px 8px 18px 8px;">
+              {('<img src="cid:' + cid_logo + '" alt="AnimeCloud" width="44" height="44" style="display:block; border-radius:50%; border:0;">') if logo_attached else '<div style="width:44px;height:44px;border-radius:50%;background:'+BRAND+';display:inline-block;"></div>'}
             </td>
           </tr>
+
+          <!-- Card -->
           <tr>
-            <td class="card" style="background:#181820;border:1px solid #2a2a36;border-radius:16px;padding:28px;">
-              <h1 style="margin:0 0 10px 0;font:700 22px/1.3 system-ui,Segoe UI,Roboto;color:#ffffff;">
-                Vítej v AnimeCloud 👋
+            <td class="card" align="center" style="background:{CARD_BG}; border:1px solid {BORDER}; border-radius:16px; padding:32px;">
+              <h1 style="margin:0 0 8px 0; font:700 22px/1.35 system-ui,Segoe UI,Roboto; color:{TEXT};">
+                Ověř prosím svůj e-mail
               </h1>
-              <p style="margin:0 0 16px 0;font:400 15px/1.6 system-ui,Segoe UI,Roboto;color:#d7d7e6;">
-                Potvrď prosím svůj e-mail kliknutím na tlačítko níže. Tím aktivuješ svůj účet.
+              <p style="margin:0 0 16px 0; font:400 14px/1.7 system-ui,Segoe UI,Roboto; color:{MUTED}; max-width:520px;">
+                Poslali jsme tento ověřovací e-mail na <strong style="color:{TEXT};">{to_email}</strong>.
+                Kliknutím na tlačítko níže aktivuješ svůj účet. Odkaz vyprší za 48 hodin.
               </p>
 
+              <!-- Button (bulletproof) -->
               <table role="presentation" cellpadding="0" cellspacing="0" border="0" class="btn" style="margin:18px 0 10px 0;">
                 <tr>
-                  <td align="center" bgcolor="#7c5cff" style="border-radius:10px;">
+                  <td align="center" bgcolor="{BRAND}" style="border-radius:10px;">
                     <a href="{verify_url}" target="_blank"
-                       style="font:600 15px/1 system-ui,Segoe UI,Roboto;color:#ffffff;text-decoration:none;padding:13px 18px;display:inline-block;border-radius:10px;">
+                       style="font:600 15px/1 system-ui,Segoe UI,Roboto; color:#ffffff; text-decoration:none; padding:14px 22px; display:inline-block; border-radius:10px;">
                       Ověřit účet
                     </a>
                   </td>
                 </tr>
               </table>
 
-              <p style="margin:12px 0 0 0;font:400 13px/1.6 system-ui,Segoe UI,Roboto;color:#a9a9bf;word-break:break-all;">
+              <!-- fallback link -->
+              <p style="margin:12px 0 0 0; font:400 12px/1.7 system-ui,Segoe UI,Roboto; color:{MUTED}; word-break:break-all; max-width:520px;">
                 Pokud tlačítko nefunguje, zkopíruj tento odkaz do prohlížeče:<br>
-                <a href="{verify_url}" style="color:#b6a7ff;text-decoration:underline;">{verify_url}</a>
+                <a href="{verify_url}" style="color:{BRAND}; text-decoration:underline;">{verify_url}</a>
               </p>
+            </td>
+          </tr>
 
-              <hr style="border:0;border-top:1px solid #2a2a36;margin:22px 0;">
-              <p style="margin:0;font:400 12px/1.6 system-ui,Segoe UI,Roboto;color:#9494ad;">
-                Pokud jsi registraci nevyžadoval/a, můžeš tento e-mail ignorovat. Odkaz má časově omezenou platnost.
-              </p>
-            </td>
-          </tr>
+          <!-- footer -->
           <tr>
-            <td align="center" style="padding:16px 8px 0 8px;color:#7c7c9a;font:400 12px/1.6 system-ui,Segoe UI,Roboto;">
-              © {time.gmtime().tm_year} AnimeCloud
+            <td align="center" style="padding:18px 8px 0 8px; color:{MUTED}; font:400 12px/1.7 system-ui,Segoe UI,Roboto;">
+              Pokud jsi registraci nevyžadoval/a, tento e-mail ignoruj.
+              <br>© {time.gmtime().tm_year} AnimeCloud
             </td>
           </tr>
-          <tr><td style="height:12px;">&nbsp;</td></tr>
+          <tr><td style="height:16px;">&nbsp;</td></tr>
         </table>
       </td>
     </tr>
@@ -163,16 +207,15 @@ def send_verification_email(to_email: str, verify_url: str):
 </html>
 """
 
-    # ---- připojit části do alternative ----
+    # ---------- připojit části ----------
     alt.attach(MIMEText(text, "plain", "utf-8"))
     alt.attach(MIMEText(html, "html", "utf-8"))
 
-    # ---- případné uložení posledního e-mailu pro debug ----
     if settings.DEV_SAVE_LAST_EMAIL:
         with open("last_email.eml", "wb") as f:
             f.write(root.as_bytes())
 
-    # ---- odeslání ----
+    # ---------- odeslání ----------
     if not (settings.SMTP_HOST and settings.SMTP_USER and settings.SMTP_PASS):
         print("[WARN] SMTP není kompletně nastaven – e-mail se neodeslal.")
         return
