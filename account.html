@@ -13,90 +13,96 @@
     body{background:var(--bg);color:var(--text)}
     .wrap{max-width:1100px;margin:24px auto;padding:16px}
     h1{font-size:1.6rem;margin:0 0 12px}
-    .toolbar{
-      display:flex;gap:.6rem;justify-content:flex-end;align-items:center;flex-wrap:wrap;margin-top:.6rem;
-    }
-    @media (max-width:640px){ .toolbar{ justify-content:flex-start; } }
-    .btn{padding:.52rem .9rem;border-radius:10px;border:1px solid var(--border);background:var(--panel);color:var(--text);cursor:pointer}
-    .btn:hover{filter:brightness(1.06)}
-    .btn-primary{background:linear-gradient(180deg,#18e7d0,#0ec9b5);border-color:#0aa79a;color:#0a1f1d;font-weight:700}
-    .btn-outline{background:transparent}
-    .btn-danger{background:#2a1011;border-color:#5e2326;color:#ffb3b6}
-    .grid{display:grid;grid-template-columns:1.2fr .8fr;gap:16px}
+
+    /* Topbar / Bottombar */
+    .topbar,.bottombar{background:var(--panel);border-bottom:1px solid var(--border)}
+    .bottombar{border-top:1px solid var(--border);border-bottom:none;margin-top:28px}
+    .topbar .inner,.bottombar .inner{max-width:1100px;margin:0 auto;display:flex;align-items:center;gap:12px;padding:10px 16px}
+    .nav a{color:var(--text);opacity:.85;text-decoration:none;padding:.4rem .6rem;border-radius:8px}
+    .nav a:hover{background:var(--bg2);opacity:1}
+    .nav .spacer{flex:1}
+
+    /* Layout */
+    .grid{display:grid;grid-template-columns:1.15fr .85fr;gap:16px}
     @media (max-width:980px){ .grid{grid-template-columns:1fr} }
     .card{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:16px}
     .row{display:flex;gap:14px;flex-wrap:wrap;align-items:center}
-    .field{display:grid;gap:6px;margin-bottom:12px}
-    .field label{font-size:.92rem;color:var(--muted)}
-    .field input[type="text"], .field input[type="url"], .field textarea, .field select{
-      background:var(--bg2);border:1px solid var(--border);border-radius:10px;color:var(--text);
-      padding:.6rem .7rem;font-size:1rem;width:100%
-    }
-    .field textarea{min-height:96px;resize:vertical}
-    .muted{color:var(--muted)}
-    .avatar{width:96px;height:96px;border-radius:50%;object-fit:cover;background:#222;border:1px solid var(--border)}
     .two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
     @media (max-width:640px){ .two{grid-template-columns:1fr} }
+
+    .field{display:grid;gap:6px;margin-bottom:12px}
+    .field label{font-size:.92rem;color:var(--muted)}
+    .field input[type="text"], .field input[type="email"], .field input[type="url"],
+    .field input[type="file"], .field textarea, .field select{
+      background:var(--bg2);border:1px solid var(--border);border-radius:10px;color:var(--text);
+      padding:.55rem .7rem;font-size:1rem;width:100%
+    }
+    .field input[readonly]{opacity:.7}
+
+    .avatar{width:108px;height:108px;border-radius:50%;object-fit:cover;background:#222;border:1px solid var(--border)}
+    .muted{color:var(--muted)}
+    .sep{height:1px;background:var(--border);margin:12px 0}
+
+    .btn{padding:.52rem .9rem;border-radius:10px;border:1px solid var(--border);background:var(--panel);color:var(--text);cursor:pointer}
+    .btn:hover{filter:brightness(1.06)}
+    .btn-primary{background:linear-gradient(180deg,#18e7d0,#0ec9b5);border-color:#0aa79a;color:#0a1f1d;font-weight:700}
+    .btn-danger{background:#2a1011;border-color:#5e2326;color:#ffb3b6}
+    .btn-ghost{background:transparent}
+
+    .ok{border:1px dashed #276447;background:#0e1f16;color:#b6f2ce;border-radius:12px;padding:10px;margin:10px 0;display:none}
+    .err{border:1px dashed #9d3437;background:#220e0f;color:#ffced0;border-radius:12px;padding:10px;margin:10px 0;display:none}
+
+    .badge-chip{display:inline-flex;align-items:center;gap:6px;padding:.25rem .6rem;border:1px solid var(--border);border-radius:999px;background:var(--bg2)}
+    .badges-row{display:flex;gap:8px;flex-wrap:wrap}
+
+    .preview .dn{font-size:1.2rem;font-weight:700}
     .statbox{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
     .stat{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:10px;text-align:center}
     .stat b{font-size:1.2rem}
-    .kv{display:flex;gap:8px;align-items:center}
-    .kv input{flex:1}
-    .pill{display:inline-flex;align-items:center;gap:8px;padding:.25rem .6rem;border:1px solid var(--border);border-radius:999px;background:var(--bg2)}
-    .sep{height:1px;background:var(--border);margin:12px 0}
-    .err{border:1px dashed #9d3437;background:#220e0f;color:#ffced0;border-radius:12px;padding:10px;margin-bottom:12px;display:none}
-    .ok{border:1px dashed #276447;background:#0e1f16;color:#b6f2ce;border-radius:12px;padding:10px;margin-bottom:12px;display:none}
-    .badge{border:1px solid var(--border);border-radius:999px;padding:.2rem .5rem;margin-right:6px}
-    .right{margin-left:auto}
-    .preview .dn{font-size:1.2rem;font-weight:700}
   </style>
 </head>
 <body>
+
+  <!-- TOPBAR -->
+  <div class="topbar">
+    <div class="inner nav">
+      <a href="/index.html">Domů</a>
+      <a href="/anime.html">Anime</a>
+      <a href="/admin.html">Admin</a>
+      <span class="spacer"></span>
+      <a href="/account.html"><b>Můj účet</b></a>
+    </div>
+  </div>
+
   <div class="wrap">
     <h1>Můj účet</h1>
 
-    <div class="toolbar">
-      <button id="btn_save" class="btn btn-primary">Uložit změny</button>
-      <button id="btn_view_public" class="btn btn-outline">Zobrazit veřejný profil</button>
-      <button id="btn_logout" class="btn btn-danger">Odhlásit</button>
-    </div>
-
-    <div id="alert_err" class="err"></div>
     <div id="alert_ok" class="ok"></div>
+    <div id="alert_err" class="err"></div>
 
     <div class="grid">
-
-      <!-- LEVÝ SLOUPEC — editace profilu -->
+      <!-- LEVÝ SLOUPEC — PROFIL -->
       <div class="card">
         <h2 style="margin-top:0">Profil</h2>
-        <div class="row" style="margin-bottom:10px">
-          <img id="avatar_preview" class="avatar" alt="Avatar">
-          <div>
+
+        <div class="row" style="margin-bottom:12px">
+          <img id="avatar_preview" class="avatar" alt="Avatar" src="/assets/default-avatar.png">
+          <div class="two" style="flex:1;min-width:260px">
             <div class="field">
               <label>Zobrazované jméno</label>
-              <input id="display_name" type="text" placeholder="Např. Meiyueh" />
+              <input id="display_name" type="text" placeholder="Např. Pepa" />
             </div>
             <div class="field">
-              <label>Avatar URL</label>
-              <input id="avatar_url" type="url" placeholder="/avatars/me.png nebo https://…" />
+              <label>E-mail uživatele</label>
+              <input id="email_ro" type="email" readonly />
             </div>
           </div>
         </div>
 
         <div class="field">
-          <label>O mně (bio)</label>
-          <textarea id="bio" placeholder="Krátké info o tobě…"></textarea>
-        </div>
-
-        <div class="two">
-          <div class="field">
-            <label>Kick odkaz</label>
-            <input id="link_kick" type="url" placeholder="https://kick.com/…" />
-          </div>
-          <div class="field">
-            <label>Steam odkaz</label>
-            <input id="link_steam" type="url" placeholder="https://steamcommunity.com/id/…" />
-          </div>
+          <label>Avatar (png / jpeg)</label>
+          <input id="avatar_file" type="file" accept="image/png,image/jpeg" />
+          <small class="muted">Vybraný soubor se po uložení nahraje jako <code>avatars/&lt;slug&gt;.&lt;ext&gt;</code>.</small>
         </div>
 
         <div class="sep"></div>
@@ -113,265 +119,268 @@
           </div>
           <div class="field">
             <label>Veřejná URL</label>
-            <div class="kv">
-              <input id="public_url" type="text" readonly>
-              <button id="btn_copy_url" class="btn btn-outline">Kopírovat</button>
+            <div class="row" style="gap:8px">
+              <input id="public_url" type="text" readonly style="flex:1">
+              <button id="btn_copy_url" class="btn btn-ghost">Kopírovat</button>
             </div>
           </div>
         </div>
 
-        <div id="link_mode_box" style="display:none">
+        <!-- Badges + Tituly -->
+        <div class="two">
           <div class="field">
-            <label>Odkaz se sdílecím tokenem</label>
-            <div class="kv">
-              <input id="link_url" type="text" readonly>
-              <button id="btn_copy_link" class="btn btn-outline">Kopírovat</button>
-              <button id="btn_rotate_token" class="btn">Obnovit token</button>
+            <label>Badges</label>
+            <div class="badges-row">
+              <label class="badge-chip"><input type="checkbox" id="badge_admin"> admin</label>
+              <label class="badge-chip"><input type="checkbox" id="badge_user"> user</label>
             </div>
-            <small class="muted">Každá obnova tokenu zneplatní starý odkaz.</small>
+          </div>
+          <div class="field">
+            <label>Tituly</label>
+            <input id="titles" type="text" placeholder="např. Zakladatel, Uploader…" />
           </div>
         </div>
 
+        <!-- Akční tlačítka patří do této karty -->
+        <div class="sep"></div>
+        <div class="row" style="justify-content:flex-end;gap:8px">
+          <button id="btn_save" class="btn btn-primary">Uložit změny</button>
+          <button id="btn_view_public" class="btn">Zobrazit veřejný profil</button>
+          <button id="btn_change_pwd" class="btn">Změnit heslo</button>
+          <button id="btn_logout" class="btn btn-danger">Odhlásit</button>
+        </div>
       </div>
 
-      <!-- PRAVÝ SLOUPEC — statistiky a náhled -->
+      <!-- PRAVÝ SLOUPEC — NÁHLED VEŘEJNÉHO PROFILU -->
       <div class="card">
         <h2 style="margin-top:0">Náhled veřejného profilu</h2>
         <div class="preview">
           <div class="row">
-            <img id="p_avatar" class="avatar" alt="avatar">
+            <img id="p_avatar" class="avatar" alt="avatar" src="/assets/default-avatar.png">
             <div>
               <div class="dn" id="p_display_name">—</div>
               <div class="muted" id="p_slug">@—</div>
-              <div class="muted" id="p_joined">—</div>
+              <div class="muted" id="p_joined">Členem od —</div>
               <div id="p_badges" style="margin-top:6px"></div>
             </div>
           </div>
-          <p id="p_bio" style="margin-top:10px" class="muted">—</p>
-          <div class="statbox">
+          <div class="statbox" style="margin-top:12px">
             <div class="stat"><div class="muted">Nahraná videa</div><b id="st_uploads">0</b></div>
             <div class="stat"><div class="muted">Oblíbené</div><b id="st_favorites">0</b></div>
             <div class="stat"><div class="muted">Ocenění</div><b id="st_badges">0</b></div>
           </div>
           <div style="margin-top:10px">
-            <span class="pill"><small>Veřejný URL</small> <code id="p_public_url" style="opacity:.8"></code></span>
+            <span class="badge-chip"><small>Veřejný URL</small> <code id="p_public_url" style="opacity:.85"></code></span>
           </div>
         </div>
-
-        <div class="sep"></div>
-
-        <h3>Moje statistiky</h3>
-        <div class="row">
-          <span class="muted">Členem od&nbsp;</span><span id="joined_at">—</span>
-          <span class="right muted">ID:&nbsp;<code id="uid">—</code></span>
-        </div>
       </div>
+    </div>
+  </div>
+
+  <!-- BOTTOMBAR -->
+  <div class="bottombar">
+    <div class="inner" style="justify-content:space-between">
+      <div class="muted">© AnimeCloud</div>
+      <div class="nav"><a href="/privacy.html">Soukromí</a><a href="/terms.html">Podmínky</a></div>
     </div>
   </div>
 
 <script>
 (function(){
   const $ = s => document.querySelector(s);
-  const setText = (sel, val) => { const el=$(sel); if(el) el.textContent = val ?? ""; };
-  const show = (sel, on) => { $(sel).style.display = on ? "" : "none"; };
+  const fmtDate = iso => {
+    try{
+      const d = new Date(iso);
+      const dd = String(d.getDate()).padStart(2,"0");
+      const mm = String(d.getMonth()+1).padStart(2,"0");
+      const yy = d.getFullYear();
+      return `${dd}.${mm}.${yy}`;
+    }catch{ return "—"; }
+  };
 
-  let ME = null; // načtený uživatel
+  let ME = null;
+  let selectedAvatarFile = null; // File | null
+
   const originBase = location.origin;
-
-  // ---- Pomocné UI ----
-  function toastOK(msg){ const a=$("#alert_ok"); a.textContent=msg; a.style.display="block"; setTimeout(()=>a.style.display="none", 2200); }
-  function toastERR(msg){ const a=$("#alert_err"); a.textContent=msg; a.style.display="block"; setTimeout(()=>a.style.display="none", 3500); }
+  const toastOK  = msg => { const a=$("#alert_ok"); a.textContent=msg; a.style.display="block"; setTimeout(()=>a.style.display="none", 2200); };
+  const toastERR = msg => { const a=$("#alert_err"); a.textContent=msg; a.style.display="block"; setTimeout(()=>a.style.display="none", 3600); };
 
   function makePublicUrl(slug){ return `${originBase}/u/${encodeURIComponent(slug)}`; }
   function makeLinkUrl(slug, token){ return `${makePublicUrl(slug)}?t=${encodeURIComponent(token||"")}`; }
 
-  function fillForm(u){
-    // Základ
-    $("#display_name").value = u.display_name || "";
-    $("#avatar_url").value   = u.avatar_url || "";
-    $("#bio").value          = u.bio || "";
-    $("#link_kick").value    = (u.links && u.links.kick)  || "";
-    $("#link_steam").value   = (u.links && u.links.steam) || "";
+  function renderBadges(badges){
+    badges = badges || [];
+    $("#p_badges").innerHTML = badges.map(b=>`<span class="badge-chip">${b}</span>`).join("");
+    $("#st_badges").textContent = badges.length;
+    $("#badge_admin").checked = badges.includes("admin");
+    $("#badge_user").checked  = badges.includes("user");
+  }
 
-    // Avatar preview
+  function fillForm(u){
+    // top fields
+    $("#display_name").value = u.display_name || "";
+    $("#email_ro").value     = u.email || u.mail || u.username || ""; // read-only (z registrace)
     const avatar = u.avatar_url || "/assets/default-avatar.png";
     $("#avatar_preview").src = avatar;
-    $("#p_avatar").src = avatar;
+    $("#p_avatar").src       = avatar;
 
-    // Slug a URL
-    setText("#p_display_name", u.display_name || u.slug);
-    setText("#p_slug", "@"+u.slug);
-    const pubUrl = makePublicUrl(u.slug);
-    $("#public_url").value = pubUrl;
-    setText("#p_public_url", pubUrl);
-
-    // Visibility
-    const vis = (u.visibility || "private").toLowerCase();
-    $("#visibility").value = vis;
-    const isLink = vis === "link";
-    show("#link_mode_box", isLink);
-    if(isLink){
-      const t = u.profile_share_token || "";
-      $("#link_url").value = t ? makeLinkUrl(u.slug, t) : "Token zatím není vygenerován";
-    }
-
-    // Náhled a stats
-    setText("#p_bio", u.bio || "—");
+    // preview header
+    $("#p_display_name").textContent = u.display_name || u.slug;
+    $("#p_slug").textContent = "@"+u.slug;
     const joined = u.joined_at || u.created_at;
-    setText("#p_joined", joined ? ("Na AnimeCloud od " + new Date(joined).toLocaleDateString()) : "—");
-    setText("#joined_at", joined ? new Date(joined).toLocaleDateString() : "—");
-    setText("#uid", u.uid || u.slug || "—");
+    $("#p_joined").textContent = joined ? ("Členem od " + fmtDate(joined)) : "Členem od —";
 
+    // stats
     const uploads = u.stats?.uploads ?? 0;
     const favs    = u.stats?.favorites ?? 0;
-    const badgesN = (u.badges?.length)||0;
-    setText("#st_uploads", uploads);
-    setText("#st_favorites", favs);
-    setText("#st_badges", badgesN);
-    $("#p_badges").innerHTML = (u.badges || []).map(b=>`<span class="badge">${b}</span>`).join("");
+    $("#st_uploads").textContent = uploads;
+    $("#st_favorites").textContent = favs;
+
+    // url + visibility
+    const pubUrl = makePublicUrl(u.slug);
+    $("#public_url").value = pubUrl;
+    $("#p_public_url").textContent = pubUrl;
+    const vis = (u.visibility || "private").toLowerCase();
+    $("#visibility").value = vis;
+
+    // badges & titles
+    renderBadges(u.badges || []);
+    $("#titles").value = (u.titles && Array.isArray(u.titles)) ? u.titles.join(", ") : (u.title || u.titles || "");
+
+    ME = u;
   }
 
-  function livePreview(){
-    // okamžitá změna náhledu z formuláře
-    const dn = $("#display_name").value.trim();
-    const au = $("#avatar_url").value.trim();
-    const bio= $("#bio").value;
-    setText("#p_display_name", dn || (ME?.slug || "—"));
-    $("#p_avatar").src = au || $("#avatar_preview").src || "/assets/default-avatar.png";
-    setText("#p_bio", bio || "—");
-  }
-
-  // ---- Načtení /api/me ----
-  fetch("/api/me").then(r=>r.json()).then(data=>{
-    if(!data || (!data.user && !data.me)){ throw new Error("Neplatná odpověď"); }
-    ME = data.user || data.me;
-    fillForm(ME);
-  }).catch(e=>{
-    console.error(e);
-    toastERR("Nepodařilo se načíst účet.");
+  // live preview of name
+  $("#display_name").addEventListener("input", ()=>{
+    $("#p_display_name").textContent = $("#display_name").value.trim() || (ME?.slug || "—");
   });
 
-  // ---- Handlery ----
-  $("#avatar_url").addEventListener("input", e=>{
-    const url = e.target.value.trim();
-    $("#avatar_preview").src = url || "/assets/default-avatar.png";
-    livePreview();
+  // avatar file -> preview
+  $("#avatar_file").addEventListener("change", (e)=>{
+    const f = e.target.files && e.target.files[0];
+    if(!f) { selectedAvatarFile = null; return; }
+    if(!/^image\/(png|jpeg)$/.test(f.type)){ toastERR("Podporujeme jen PNG/JPEG."); e.target.value=""; return; }
+    selectedAvatarFile = f;
+    const reader = new FileReader();
+    reader.onload = ev=>{
+      $("#avatar_preview").src = ev.target.result;
+      $("#p_avatar").src = ev.target.result;
+    };
+    reader.readAsDataURL(f);
   });
-  $("#display_name").addEventListener("input", livePreview);
-  $("#bio").addEventListener("input", livePreview);
 
-  // Změna visibility
+  // copy URL
+  $("#btn_copy_url").onclick = async ()=>{
+    try{ await navigator.clipboard.writeText($("#public_url").value); toastOK("Veřejná URL zkopírována."); }
+    catch{ toastERR("Nepodařilo se zkopírovat URL."); }
+  };
+
+  // visibility change (volitelné – uloží hned)
   $("#visibility").addEventListener("change", async (e)=>{
-    const visibility = e.target.value;
     try{
       const res = await fetch("/api/me/profile_visibility", {
         method:"POST", headers:{ "Content-Type":"application/json" },
-        body: JSON.stringify({ visibility })
+        body: JSON.stringify({ visibility: e.target.value })
       });
-      const j = await res.json();
-      if(!res.ok){ throw new Error(j?.error || "Chyba při ukládání viditelnosti."); }
-      // zobrazení boxu pro token v link režimu
-      show("#link_mode_box", visibility==="link");
-      // pokud API vrátí token, použijeme jej
-      if(visibility==="link"){
-        const t = j.profile_share_token || ME?.profile_share_token || "";
-        ME.profile_share_token = t;
-        $("#link_url").value = t ? makeLinkUrl(ME.slug, t) : "Token zatím není vygenerován";
-      }
-      // refreshe veřejné URL (nemění se, ale ať je to konzistentní)
-      $("#public_url").value = makePublicUrl(ME.slug);
-      setText("#p_public_url", $("#public_url").value);
-      ME.visibility = visibility;
+      if(!res.ok){ throw new Error("Uložení viditelnosti selhalo."); }
       toastOK("Viditelnost uložena.");
-    }catch(err){
-      console.error(err);
-      toastERR(String(err.message||err));
-      // revert UI na hodnotu z ME
-      $("#visibility").value = (ME?.visibility||"private");
-      show("#link_mode_box", (ME?.visibility==="link"));
-    }
+    }catch(err){ toastERR(err.message||String(err)); $("#visibility").value = ME?.visibility || "private"; }
   });
 
-  // Obnova tokenu
-  $("#btn_rotate_token").addEventListener("click", async ()=>{
-    try{
-      const res = await fetch("/api/me/profile_token", {
-        method:"POST", headers:{ "Content-Type":"application/json" },
-        body: JSON.stringify({ action: "rotate" })
-      });
-      const j = await res.json();
-      if(!res.ok){ throw new Error(j?.error || "Chyba při generování tokenu."); }
-      const t = j.profile_share_token;
-      ME.profile_share_token = t;
-      $("#link_url").value = makeLinkUrl(ME.slug, t);
-      toastOK("Token obnoven.");
-    }catch(err){
-      console.error(err);
-      toastERR(String(err.message||err));
-    }
-  });
-
-  // Kopírování URL
-  $("#btn_copy_url").addEventListener("click", async ()=>{
-    try{
-      await navigator.clipboard.writeText($("#public_url").value);
-      toastOK("Veřejná URL zkopírována.");
-    }catch{ toastERR("Nepodařilo se zkopírovat URL."); }
-  });
-  $("#btn_copy_link").addEventListener("click", async ()=>{
-    try{
-      await navigator.clipboard.writeText($("#link_url").value);
-      toastOK("Odkaz s tokenem zkopírován.");
-    }catch{ toastERR("Nepodařilo se zkopírovat odkaz."); }
-  });
-
-  // Uložit změny profilu
+  // save
   $("#btn_save").addEventListener("click", async ()=>{
-    const payload = {
-      display_name: $("#display_name").value.trim(),
-      avatar_url: $("#avatar_url").value.trim(),
-      bio: $("#bio").value,
-      links: {
-        kick: $("#link_kick").value.trim() || undefined,
-        steam: $("#link_steam").value.trim() || undefined
-      }
-    };
     try{
+      let avatar_url = ME?.avatar_url || "";
+
+      // 1) pokud je vybraný soubor, nahraj ho přes /upload
+      if(selectedAvatarFile && ME?.slug){
+        const ext = selectedAvatarFile.type === "image/png" ? "png" : "jpg";
+        const destPath = `avatars/${ME.slug}.${ext}`; // jak bude uložen na serveru/GCS
+        const fd = new FormData();
+        fd.append("file", selectedAvatarFile, `${ME.slug}.${ext}`);
+        // většina naší logiky /upload očekává i cílovou cestu
+        fd.append("path", destPath);
+        fd.append("kind", "avatar");
+
+        const up = await fetch("/upload", { method:"POST", body: fd });
+        let upJson = null;
+        try{ upJson = await up.json(); }catch{}
+        if(!up.ok){
+          throw new Error(upJson?.error || "Nahrávání avataru selhalo.");
+        }
+        // pokusíme se vzít url z odpovědi, jinak použijeme destinaci
+        avatar_url = upJson?.url || upJson?.public_url || `/${destPath}`;
+      }
+
+      // 2) badges + titles
+      const badges = [];
+      if($("#badge_admin").checked) badges.push("admin");
+      if($("#badge_user").checked)  badges.push("user");
+      const titlesStr = $("#titles").value.trim();
+      const titles = titlesStr ? titlesStr.split(",").map(s=>s.trim()).filter(Boolean) : [];
+
+      // 3) ulož profil
+      const payload = {
+        display_name: $("#display_name").value.trim(),
+        avatar_url: avatar_url,              // přepíšeme jen když máme
+        // email je read-only, neposíláme
+        // visibility už se případně uložila při onchange, ale můžeme poslat taky
+        // visibility: $("#visibility").value,
+        badges,          // backend (ac/me.py) námi dodaný to umí uložit
+        titles           // volitelné
+      };
+
       const res = await fetch("/api/me/update", {
         method:"POST", headers:{ "Content-Type":"application/json" },
         body: JSON.stringify(payload)
       });
       const j = await res.json().catch(()=> ({}));
-      if(!res.ok){ throw new Error(j?.error || "Chyba při ukládání profilu."); }
-      // zapiš do ME a refresh náhledu
-      Object.assign(ME, payload);
-      fillForm(ME);
+      if(!res.ok){ throw new Error(j?.error || "Uložení profilu selhalo."); }
+
+      // refresh lokálního stavu a náhledu
+      ME = j.me || ME;
+      if(avatar_url) { ME.avatar_url = avatar_url + `?ts=${Date.now()}`; }
+      $("#avatar_preview").src = ME.avatar_url || $("#avatar_preview").src;
+      $("#p_avatar").src       = ME.avatar_url || $("#p_avatar").src;
+      renderBadges(badges);
+      $("#p_display_name").textContent = $("#display_name").value.trim() || ME.slug;
+
       toastOK("Profil uložen.");
+      selectedAvatarFile = null;
+      $("#avatar_file").value = "";
     }catch(err){
       console.error(err);
-      toastERR(String(err.message||err));
+      toastERR(err.message || String(err));
     }
   });
 
-  // Zobrazit veřejný profil (v novém panelu)
+  // view public
   $("#btn_view_public").addEventListener("click", ()=>{
-    const vis = $("#visibility").value;
-    const base = makePublicUrl(ME?.slug || "");
-    if(vis==="link" && (ME?.profile_share_token)){
-      window.open(makeLinkUrl(ME.slug, ME.profile_share_token), "_blank");
-    }else{
-      window.open(base, "_blank");
-    }
+    if(!ME) return;
+    window.open(makePublicUrl(ME.slug), "_blank");
   });
 
-  // Odhlášení — přizpůsob si endpoint (pokud máš jiný)
+  // change password (pošli na tvoji stránku / endpoint)
+  $("#btn_change_pwd").addEventListener("click", ()=>{
+    location.href = "/change-password.html";
+  });
+
+  // logout
   $("#btn_logout").addEventListener("click", async ()=>{
-    try{
-      const res = await fetch("/api/logout", { method:"POST" });
-      // i kdyby endpoint nevrátil JSON, pokračuj
-    }catch{}
+    try{ await fetch("/api/logout", { method:"POST" }); }catch{}
     location.href = "/login.html";
   });
+
+  // load /api/me
+  fetch("/api/me").then(r=>r.json()).then(data=>{
+    const u = data.user || data.me;
+    if(!u) throw new Error("Neplatná odpověď /api/me");
+    fillForm(u);
+  }).catch(e=>{
+    console.error(e);
+    toastERR("Nepodařilo se načíst účet.");
+  });
+
 })();
 </script>
 </body>
