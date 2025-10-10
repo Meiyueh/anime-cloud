@@ -4,6 +4,7 @@
   <meta charset="utf-8" />
   <title>Profil • AnimeCloud</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- sdílíme existující téma -->
   <link rel="stylesheet" href="/styles/main.css" />
   <style>
     .container{max-width:980px;margin:24px auto;padding:0 16px}
@@ -14,7 +15,7 @@
     .muted{color:var(--muted)}
     .badges{display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.4rem}
     .chip{border:1px solid var(--border);border-radius:999px;padding:.15rem .55rem}
-    .notice{margin-top:1rem;padding:.6rem .8rem;border:1px dashed var(--border);border-radius:10px;color:var(--muted);display:none}
+    .notice{margin-top:1rem;padding:.6rem .8rem;border:1px dashed var(--border);border-radius:10px;color:var(--muted)}
   </style>
 </head>
 <body>
@@ -38,59 +39,74 @@
         <div id="titles" class="badges"></div>
       </div>
     </div>
-    <div id="privateNote" class="notice">Tento profil je aktuálně neveřejný.</div>
+    <div id="privateNote" class="notice" style="display:none">Tento profil je aktuálně neveřejný.</div>
   </main>
 
   <footer class="site-footer"><small>AnimeCloud</small></footer>
 
   <script>
+    // Pomůcky
     function ddmmyyyy(iso){
       if(!iso) return '—';
       const d = new Date(iso);
-      return String(d.getDate()).padStart(2,'0')+'.'
-           + String(d.getMonth()+1).padStart(2,'0')+'.'
-           + d.getFullYear();
+      const dd = String(d.getDate()).padStart(2,'0');
+      const mm = String(d.getMonth()+1).padStart(2,'0');
+      const yy = d.getFullYear();
+      return `${dd}.${mm}.${yy}`;
     }
+    function byId(id){ return document.getElementById(id); }
+
+    // Slug z URL
     const slug = decodeURIComponent(location.pathname.replace(/^.*\/u\//,'').replace(/\/.*$/,''));
 
     async function loadProfile(){
       try{
         const r = await fetch(`/api/profile/${encodeURIComponent(slug)}`);
         const j = await r.json();
-        if(!j.ok) throw 0;
+        if(!j.ok){ throw new Error('not found'); }
         const p = j.profile || {};
 
-        document.getElementById('dn').textContent = p.display_name || slug;
-        document.getElementById('slug').textContent = '@' + (p.slug || slug);
-        document.getElementById('joined').textContent = 'Členem od ' + ddmmyyyy(p.joined_at);
+        // Jméno a slug
+        byId('dn').textContent = p.display_name || slug;
+        byId('slug').textContent = '@' + (p.slug || slug);
+        byId('joined').textContent = 'Členem od ' + ddmmyyyy(p.joined_at);
 
-        const tWrap = document.getElementById('titles');
+        // Tituly
+        const tWrap = byId('titles');
         tWrap.innerHTML = '';
         (p.titles || []).forEach(t=>{
           const s = document.createElement('span');
-          s.className='chip'; s.textContent=t; tWrap.appendChild(s);
+          s.className = 'chip';
+          s.textContent = t;
+          tWrap.appendChild(s);
         });
 
-        const img = document.getElementById('ava');
-        const fb  = document.getElementById('avaFallback');
+        // Avatar + fallback iniciála
+        const img = byId('ava');
+        const fb  = byId('avaFallback');
         const initial = (p.display_name || p.slug || '?').trim()[0]?.toUpperCase() || '?';
 
-        if (p.avatar_url){
-          img.src = p.avatar_url + (p.avatar_url.includes('?')?'&':'?') + 'ts=' + Date.now();
-          img.style.display=''; fb.style.display='none';
+        if (p.avatar_url && p.avatar_url.trim() !== ''){
+          img.src = p.avatar_url + (p.avatar_url.includes('?') ? '&' : '?') + 'ts=' + Date.now();
+          img.style.display = '';
+          fb.style.display  = 'none';
           img.onerror = ()=>{ img.style.display='none'; fb.textContent=initial; fb.style.display='flex'; };
         } else {
-          img.style.display='none'; fb.textContent=initial; fb.style.display='flex';
+          img.style.display = 'none';
+          fb.textContent = initial;
+          fb.style.display = 'flex';
         }
 
+        // Viditelnost (jen info)
         if ((p.visibility||'public') !== 'public'){
-          document.getElementById('privateNote').style.display='';
+          byId('privateNote').style.display = '';
         }
-      }catch{
+      }catch(e){
         document.body.innerHTML =
           "<main class='container'><h1>Profil nenalezen</h1><p class='muted'>Zkontroluj prosím adresu.</p></main>";
       }
     }
+
     loadProfile();
   </script>
 </body>
