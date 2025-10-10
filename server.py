@@ -1,38 +1,36 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 import os, traceback
 from http.server import SimpleHTTPRequestHandler, HTTPServer
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs
 
-# --- Projektové moduly (načtou i .env přes settings) ---
+# Importy modulů (načtou i .env přes settings)
 from ac import settings
 from ac import auth, uploads, anime, feedback
-from ac import profile   # /u/<slug>, /api/profile/<slug>
-from ac import me        # /api/me*, viz account.html
+import ac.me as me
+import ac.profile as profile
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 class Handler(SimpleHTTPRequestHandler):
-    # --- CORS & pomocné výstupy ---
+    # --- CORS a utilitky výstupu ---
     def _set_cors(self):
-        # Pokud máš víc originů, dej např. "*", nebo join seznamu:
+        # stejné origin, ale ať je to tolerantní
         self.send_header("Access-Control-Allow-Origin", settings.CORS_ORIGINS)
         self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        # povolíme custom hlavičky (kvůli případným X-*)
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Auth-Email, X-Requested-With")
 
     def end_headers(self):
         self._set_cors()
         super().end_headers()
 
     def do_OPTIONS(self):
-        self.send_response(204)
-        self.end_headers()
+        self.send_response(204); self.end_headers()
 
     def _read_body(self):
         length = int(self.headers.get("Content-Length") or 0)
-        raw = self.rfile.read(length) if length else b""
+        raw = self.rfile.read(length)
         ctype = (self.headers.get("Content-Type") or "").lower()
-        # sdílený parser z auth (JSON/form-data/x-www-form-urlencoded)
         return auth.parse_body(raw, ctype)
 
     def _json(self, code, obj):
@@ -57,43 +55,46 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             p = urlparse(self.path)
 
-            # ===== Veřejné profily =====
-            if p.path.startswith("/api/profile/"):   # JSON profil (public/link)
-                return profile.handle_profile_api(self, p)
-            if p.path.startswith("/u/"):             # HTML profilová stránka
-                return profile.handle_profile_page(self, p)
-
-            # ===== Účet přihlášeného uživatele (pro account.html) =====
-            if p.path == "/api/me":
-                return me.handle_me_get(self, p)
-
-            # ===== Stávající endpointy =====
+            # API – původní
             if p.path == "/auth/verify":         return auth.handle_verify(self, p)
             if p.path == "/data/anime.json":     return anime.handle_anime_json(self)
             if p.path == "/uploads/counts":      return anime.handle_upload_counts(self)
             if p.path == "/stats":               return anime.handle_stats(self)
             if p.path == "/feedback/list":       return feedback.handle_feedback_list(self)
 
-            # Static files (spadne to na SimpleHTTPRequestHandler)
-            return super().do_GET()
+            # API – nový
+            if p.path == "/api/me":              return me.handle_me_get(self, p)
+            if p.path.startswith("/api/profile/"): return profile.handle_profile_api(self, p)
 
+            # Veřejný profil
+            if p.path.startswith("/u/"):         return profile.handle_profile_page(self, p)
+
+            return super().do_GET()
         except Exception as e:
             traceback.print_exc()
-            return self._json(500, {"ok": False, "error": str(e)})
+            return self._json(500, {"ok":False,"error":str(e)})
 
     def do_POST(self):
         try:
             p = urlparse(self.path)
 
-            # ===== Účet přihlášeného uživatele =====
-            if p.path == "/api/me/update":             return me.handle_me_update(self, p)
-            if p.path == "/api/me/profile_visibility": return me.handle_me_visibility(self, p)
-            if p.path == "/api/me/profile_token":      return me.handle_me_profile_token(self, p)
-
-            # ===== Auth / Uploady / Admin / Feedback =====
+            # Auth / uploads / admin / feedback
             if p.path == "/auth/register":       return auth.handle_register(self)
             if p.path == "/auth/login":          return auth.handle_login(self)
             if p.path == "/auth/resend":         return auth.handle_resend(self)
+
+            # DOPLNĚNO: starý endpoint používá frontend jako fallback
+            if p.path == "/auth/update_profile":
+                # pokud v auth není implementace, vrať přátelskou chybu
+                if hasattr(auth, "handle_update_profile"):
+                    return auth.handle_update_profile(self)
+                return self._json(404, {"ok":False,"error":"handle_update_profile not implemented"})
+
+            # DOPLNĚNO: změna hesla
+            if p.path == "/auth/change_password":
+                if hasattr(auth, "handle_change_password"):
+                    return auth.handle_change_password(self)
+                return self._json(404, {"ok":False,"error":"handle_change_password not implemented"})
 
             if p.path == "/upload":              return uploads.handle_upload(self)
             if p.path == "/upload/sign":         return uploads.handle_upload_sign(self)
@@ -105,24 +106,19 @@ class Handler(SimpleHTTPRequestHandler):
             if p.path == "/feedback":            return feedback.handle_feedback_save(self)
             if p.path == "/feedback/update":     return feedback.handle_feedback_update(self)
 
-            # Utility
-            if p.path == "/wipe_all":
-                return self._json(200, {"ok": True, "status": "cloud wipe disabled"})
+            # ME API
+            if p.path == "/api/me/update":       return me.handle_me_update(self, p)
+            if p.path == "/api/me/profile_visibility": return me.handle_profile_visibility(self, p)
 
-            return self._json(404, {"ok": False, "error": "Not found"})
-
+            if p.path == "/wipe_all":            return self._json(200, {"ok":True,"status":"cloud wipe disabled"})
+            return self._json(404, {"ok":False,"error":"Not found"})
         except Exception as e:
             traceback.print_exc()
-            return self._json(500, {"ok": False, "error": str(e)})
+            return self._json(500, {"ok":False,"error":str(e)})
 
 def main():
-    # volitelný bootstrap admina
-    if getattr(settings, "ADMIN_BOOT_ENABLE", False):
-        try:
-            auth.bootstrap_admin_if_needed()
-        except Exception:
-            traceback.print_exc()
-
+    if settings.ADMIN_BOOT_ENABLE:
+        auth.bootstrap_admin_if_needed()
     os.chdir(BASE_DIR)
     httpd = HTTPServer(("0.0.0.0", settings.PORT), Handler)
     print(f"AnimeCloud server běží na http://0.0.0.0:{settings.PORT}")
