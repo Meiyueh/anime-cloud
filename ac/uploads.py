@@ -1,5 +1,5 @@
 # ac/uploads.py
-import os, io, json, cgi, mimetypes, traceback
+import os, io, json, cgi, mimetypes, traceback, sys
 from datetime import timedelta
 from google.cloud import storage
 
@@ -10,11 +10,13 @@ def _json(handler, code, obj): return handler._json(code, obj)
 
 def _get_bucket():
     if not BUCKET_NAME:
+        print("[UPLOAD] GCS_BUCKET není nastaveno", file=sys.stderr)
         return None
     try:
         client = storage.Client()
         return client.bucket(BUCKET_NAME)
-    except Exception:
+    except Exception as e:
+        print(f"[UPLOAD] storage.Client() selhalo: {e}", file=sys.stderr)
         return None
 
 def handle_upload_sign(handler):
@@ -24,6 +26,7 @@ def handle_upload_sign(handler):
         path = (body.get("path") or "").lstrip("/")
         ctype = body.get("content_type") or body.get("ctype") or body.get("type") or "application/octet-stream"
         if not path:
+            print("[UPLOAD] missing path v /upload/sign", file=sys.stderr)
             return _json(handler, 400, {"ok": False, "error": "missing path"})
         bucket = _get_bucket()
         if not bucket:
@@ -41,9 +44,7 @@ def handle_upload_sign(handler):
 
 def handle_upload(handler):
     """
-    Multipart upload pro jednoduché případy:
-      - pole: file (binary), path (volitelné), kind (volitelné)
-      - když je GCS nakonfig., uloží do GCS; jinak uloží lokálně vedle serveru
+    Multipart fallback: field 'file' + optional 'path'.
     """
     try:
         fs = cgi.FieldStorage(fp=handler.rfile, headers=handler.headers,
@@ -66,9 +67,9 @@ def handle_upload(handler):
             public_url = f"{GCS_PUBLIC_BASE}/{path}"
             return _json(handler, 200, {"ok": True, "url": public_url, "path": path})
         else:
-            # lokální fallback
-            dst = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", path)
-            dst = os.path.abspath(dst)
+            # lokální uložení vedle projektu (fallback)
+            root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+            dst = os.path.abspath(os.path.join(root, path))
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             with open(dst, "wb") as f:
                 f.write(raw)
@@ -86,10 +87,11 @@ def handle_delete_file(handler):
         bucket = _get_bucket()
         if bucket:
             blob = bucket.blob(path)
-            blob.delete(if_generation_match=None)  # best effort
+            blob.delete(if_generation_match=None)
             return _json(handler, 200, {"ok": True})
         # local fallback
-        dst = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", path))
+        root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        dst = os.path.abspath(os.path.join(root, path))
         if os.path.exists(dst): os.remove(dst)
         return _json(handler, 200, {"ok": True})
     except Exception as e:
