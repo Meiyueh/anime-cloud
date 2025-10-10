@@ -146,11 +146,34 @@
 
   <script src="scripts/app.js"></script>
   <script>
-    // === init navbar + guard ===
-    App.initNavbar();
-    App.guardAuthOnPage('login.html');
+    /* =========================
+       NAVBAR & ACCESS GUARD (jen localStorage, žádné 401)
+       ========================= */
+    App.initNavbar?.();
   
-    // === krátké helpers ===
+    function navFromLocalAuth(){
+      const auth   = (App.auth && App.auth()) || {};
+      const logged = !!auth.email;
+      const $ = (id)=> document.getElementById(id);
+      const show = (id, v)=>{ const el=$(id); if(el) el.classList.toggle('hidden', !v); };
+  
+      show('nav-login',   !logged);
+      show('nav-account',  logged);
+      show('nav-upload',   logged);
+      show('nav-feedback', logged);
+      show('nav-admin',    logged && auth.role === 'admin');
+    }
+    navFromLocalAuth();
+    window.addEventListener('storage', (e)=>{ if(e.key==='animecloud_auth') navFromLocalAuth(); });
+  
+    // tvrdá ochrana stránky – bez volání na backend
+    if(!(App.auth && App.auth() && App.auth().email)){
+      location.href = 'login.html';
+    }
+  
+    /* =========================
+       ZÁKLADY / HELPERY
+       ========================= */
     const a      = App.auth() || {};
     const token  = a?.token || null;
     const email  = a?.email || '';
@@ -163,14 +186,40 @@
       return String(d.getDate()).padStart(2,'0')+'.'+String(d.getMonth()+1).padStart(2,'0')+'.'+d.getFullYear();
     };
   
-    // === primární pole v UI ===
-    $('acc-email-ro').value          = email;
-    $('meta-email').textContent      = email;
-    $('meta-uploads').textContent    = String(App.userUploadCount(email));
-    let ME   = null;
-    let slug = email.split('@')[0];
+    // do UI hned
+    $('acc-email-ro').value       = email;
+    $('meta-email').textContent   = email;
+    $('meta-uploads').textContent = String(App.userUploadCount(email));
   
-    // === Tituly: zamčené/odemčené podle milníků ===
+    // Letter-avatar jako dataURL (pro preview fallback)
+    function letterAvatar(letter='?'){
+      const L = (letter||'?').toUpperCase();
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96">
+        <rect width="100%" height="100%" rx="48" ry="48" fill="#2a2d3a"/>
+        <text x="50%" y="55%" text-anchor="middle" font-size="42" fill="#8e90ff" font-family="system-ui,Arial">${L}</text>
+      </svg>`;
+      return 'data:image/svg+xml;charset=utf-8,'+encodeURIComponent(svg);
+    }
+  
+    // zobrazení (zkrácené) veřejné URL do inputu + plnou URL do datasetu pro copy
+    function setPublicUrl(origin, slug){
+      const full = origin + '/u/' + slug;
+      const short = origin.replace(/^https?:\/\/[^/]+/i,'http://x') + '/u/' + slug;
+      $('inpPublicUrl').value = short;
+      $('inpPublicUrl').dataset.full = full;
+    }
+    // click-to-copy
+    async function copyText(text){
+      try{ await navigator.clipboard.writeText(text); App.toast('URL zkopírována','ok'); }
+      catch{
+        const t=document.createElement('input');
+        t.value=text; t.style.position='fixed'; t.style.opacity=0; document.body.appendChild(t);
+        t.select(); document.execCommand('copy'); t.remove(); App.toast('URL zkopírována','ok');
+      }
+    }
+    $('inpPublicUrl').addEventListener('click', ()=> copyText($('inpPublicUrl').dataset.full || $('inpPublicUrl').value));
+  
+    // tituly uzamčené/odemčené podle milníků
     function buildTitles(unlocked){
       const all = ['Veterán (10+)', 'Mistr Uploader (50+)', 'Legenda (100+)'];
       const sel = $('selTitles');
@@ -181,78 +230,65 @@
     }
     buildTitles(App.unlockedTitles(email));
   
-    // === avatar: fallback písmeno + fallback na druhou příponu ===
-    function showPrevAvatar(url, letter){
-      const img = $('prev-avatar');
-      const fb  = $('prev-ava-fb');
-      if(url){
-        img.style.display='block'; fb.style.display='none'; img.src = url;
-      }else{
-        img.style.display='none'; fb.style.display='flex'; fb.textContent=(letter||'?').toUpperCase();
-      }
-    }
+    // avatar fallback na druhou příponu
     function addAvatarFallback(imgEl){
       imgEl.onerror = ()=>{
-        const base = imgEl.src.split('?')[0];
+        const base = (imgEl.getAttribute('data-base') || imgEl.src).split('?')[0];
         const isPng = /\.png$/i.test(base);
-        const alt   = base.replace(/\.(png|jpe?g)$/i, isPng ? '.jpg' : '.png');
-        imgEl.onerror = ()=>{ imgEl.style.display='none'; $('prev-ava-fb').style.display='flex'; };
+        const alt = base.replace(/\.(png|jpe?g)$/i, isPng ? '.jpg' : '.png');
+        imgEl.onerror = ()=>{ imgEl.src = letterAvatar(email[0]); };
+        imgEl.setAttribute('data-base', alt);
         imgEl.src = alt + `?ts=${Date.now()}`;
       };
     }
   
-    // === zkrácené vs. plné URL k profilu ===
-    function setPublicUrl(origin, s){
-      $('inpPublicUrl').value = origin.replace(/^https?:\/\/[^/]+/i,'http://x') + '/u/' + s; // zobrazené (krátké)
-      $('inpPublicUrl').dataset.full = origin + '/u/' + s;                                   // plná pro kopírování
-    }
-    async function copyText(text){
-      try{ await navigator.clipboard.writeText(text); App.toast('URL zkopírována','ok'); }
-      catch{
-        const tmp=document.createElement('input'); tmp.value=text; tmp.style.position='fixed'; tmp.style.opacity=0;
-        document.body.appendChild(tmp); tmp.select(); document.execCommand('copy'); tmp.remove();
-        App.toast('URL zkopírována','ok');
-      }
-    }
-    $('inpPublicUrl').addEventListener('click', ()=> copyText($('inpPublicUrl').dataset.full || $('inpPublicUrl').value));
+    let ME   = null;
+    let slug = email.split('@')[0];
   
-    // === načtení /api/me?email=... ===
+    /* =========================
+       NAČTENÍ /api/me?email=...
+       ========================= */
     async function loadMe(){
       try{
         const r = await fetch('/api/me?email='+encodeURIComponent(email));
         const j = await r.json();
         if(!r.ok || !j?.me) throw 0;
+  
         ME   = j.me;
         slug = ME.slug || slug;
   
-        $('inpNickname').value          = ME.display_name || '';
-        $('acc-nickname').textContent   = ME.display_name || email;
-        $('selVisibility').value        = (ME.visibility||'private').toLowerCase();
+        $('inpNickname').value        = ME.display_name || '';
+        $('acc-nickname').textContent = ME.display_name || email;
+  
+        $('selVisibility').value      = (ME.visibility||'private').toLowerCase();
   
         const joined = ME.joined_at || ME.created_at;
-        $('meta-created').textContent   = joined ? ddmmyyyy(joined) : '—';
-        $('prev-joined').textContent    = 'Členem od ' + (joined ? ddmmyyyy(joined) : '—');
+        $('meta-created').textContent = joined ? ddmmyyyy(joined) : '—';
+        $('prev-joined').textContent  = 'Členem od ' + (joined ? ddmmyyyy(joined) : '—');
   
         setPublicUrl(location.origin, encodeURIComponent(slug));
-        $('prev-name').textContent      = ME.display_name || slug;
-        $('prev-slug').textContent      = '@' + slug;
+        $('prev-name').textContent = ME.display_name || slug;
+        $('prev-slug').textContent = '@' + slug;
   
         const ava = ME.avatar_url || '';
         if(ava){
           const bust = `${ava}?ts=${Date.now()}`;
-          $('acc-avatar').innerHTML = `<img id="acc-avatar-img" src="${bust}" alt="avatar">`;
-          const accImg = $('acc-avatar-img'); addAvatarFallback(accImg);
-          showPrevAvatar(bust, email[0]); addAvatarFallback($('prev-avatar'));
+          $('acc-avatar').innerHTML = `<img id="acc-avatar-img" src="${bust}" data-base="${ava}" alt="avatar">`;
+          addAvatarFallback($('acc-avatar-img'));
+  
+          $('prev-avatar').setAttribute('data-base', ava);
+          $('prev-avatar').src = bust;
+          addAvatarFallback($('prev-avatar'));
         }else{
           $('acc-avatar-letter').textContent = (email||'?')[0].toUpperCase();
-          showPrevAvatar('', email[0]);
+          $('prev-avatar').src = letterAvatar(email[0]);
         }
   
-        // předvyplnit tituly pokud jsou
         const tInit = Array.isArray(ME.titles) ? (ME.titles[0]||'') : '';
         if(tInit) $('selTitles').value = tInit;
+  
       }catch{
-        // fallback z localStorage (aspoň něco)
+        // fallback: aspoň něco z localStorage
         const prof = a.profile || {};
         $('inpNickname').value        = prof.nickname || '';
         $('acc-nickname').textContent = prof.nickname || email;
@@ -262,21 +298,23 @@
         $('prev-joined').textContent  = 'Členem od ' + (created ? ddmmyyyy(created) : '—');
   
         setPublicUrl(location.origin, encodeURIComponent(slug));
-        $('prev-name').textContent     = prof.nickname || slug;
-        $('prev-slug').textContent     = '@' + slug;
+        $('prev-name').textContent = prof.nickname || slug;
+        $('prev-slug').textContent = '@' + slug;
   
         if(prof.avatar){
           $('acc-avatar').innerHTML = `<img id="acc-avatar-img" src="${prof.avatar}" alt="avatar">`;
-          showPrevAvatar(prof.avatar, email[0]);
+          $('prev-avatar').src = prof.avatar;
         }else{
           $('acc-avatar-letter').textContent = (email||'?')[0].toUpperCase();
-          showPrevAvatar('', email[0]);
+          $('prev-avatar').src = letterAvatar(email[0]);
         }
       }
     }
     loadMe();
   
-    // === avatar výběr + náhled ===
+    /* =========================
+       AVATAR: výběr + náhled
+       ========================= */
     $('acc-avatar').addEventListener('click', ()=> $('inpAvatar').click());
     let avatarFile = null;
     $('inpAvatar').addEventListener('change', ()=>{
@@ -287,14 +325,14 @@
       avatarFile = f;
       const r=new FileReader();
       r.onload = ()=>{
-        const u = r.result;
+        const u=r.result;
         $('acc-avatar').innerHTML = `<img id="acc-avatar-img" src="${u}" alt="avatar">`;
-        showPrevAvatar(u, email[0]);
+        $('prev-avatar').src = u;
       };
       r.readAsDataURL(f);
     });
   
-    // === live náhled jména ===
+    // live náhled jména
     $('inpNickname').addEventListener('input', ()=>{
       const v = $('inpNickname').value.trim();
       const name = v || (ME?.display_name) || email;
@@ -302,13 +340,19 @@
       $('prev-name').textContent    = name;
     });
   
-    // === změna viditelnosti ===
+    /* =========================
+       VIDITELNOST
+       ========================= */
     $('selVisibility').addEventListener('change', async (e)=>{
+      const body = JSON.stringify({ visibility: e.target.value });
+      const hdrs = {'Content-Type':'application/json'};
       try{
-        const r = await fetch('/api/me/visibility?email='+encodeURIComponent(email),{
-          method:'POST', headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({ visibility: e.target.value })
-        });
+        // preferované
+        let r = await fetch('/api/me/visibility?email='+encodeURIComponent(email),{method:'POST',headers:hdrs,body});
+        if(!r.ok){
+          // fallback starší název
+          r = await fetch('/api/me/profile_visibility?email='+encodeURIComponent(email),{method:'POST',headers:hdrs,body});
+        }
         const j = await r.json().catch(()=> ({}));
         if(!r.ok || !j?.ok) throw 0;
         App.toast('Viditelnost uložena','ok');
@@ -317,28 +361,35 @@
       }
     });
   
-    // === upload do GCS: klíč v bucketu s '@', ale URL s %40 ===
+    /* =========================
+       UPLOAD DO GCS (signed PUT → multipart fallback)
+       ========================= */
     function buildAvatarUrl(email, ext){
       const emailEnc = encodeURIComponent(email.toLowerCase());
       return `${CLOUD_BASE}/private/avatars/${emailEnc}.${ext}`;
     }
     async function signAndUploadToGCS(file, email){
       const ext = /png$/i.test(file.type) ? 'png' : 'jpg';
-      const dst = `private/avatars/${email.toLowerCase()}.${ext}`; // objekt v bucketu (s @)
-      // 1) signed PUT
-      const res = await fetch('/upload/sign', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ path: dst, contentType: file.type })
-      });
-      if(res.ok){
-        const sj  = await res.json();
-        const put = await fetch(sj.upload_url || sj.signed_url || sj.url, {
-          method:'PUT', headers:{'Content-Type': file.type}, body:file
-        });
-        if(!put.ok) throw new Error('Upload do GCS selhal');
-        return { url: buildAvatarUrl(email, ext), ext };
+      const dst = `private/avatars/${email.toLowerCase()}.${ext}`; // objekt v bucketu (s '@')
+      // 1) zkus signed PUT s několika variantami klíčů
+      const variants = [
+        { path: dst, contentType: file.type },
+        { path: dst, content_type: file.type },
+        { path: dst, type: file.type }
+      ];
+      for(const v of variants){
+        try{
+          const res = await fetch('/upload/sign',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(v)});
+          const sj  = await res.json().catch(()=> ({}));
+          if(res.ok && (sj.upload_url || sj.signed_url || sj.url)){
+            const up = sj.upload_url || sj.signed_url || sj.url;
+            const put = await fetch(up,{method:'PUT',headers:{'Content-Type': file.type}, body: file});
+            if(!put.ok) throw new Error('PUT selhal');
+            return { url: buildAvatarUrl(email, ext), ext };
+          }
+        }catch{ /* zkus další variantu */ }
       }
-      // 2) fallback multipart
+      // 2) multipart fallback
       const fd = new FormData();
       fd.append('file', file, `avatar.${ext}`);
       fd.append('path', dst);
@@ -348,13 +399,15 @@
       return { url: buildAvatarUrl(email, ext), ext };
     }
   
-    // === Uložit vše ===
+    /* =========================
+       ULOŽIT ZMĚNY
+       ========================= */
     $('btnSaveAll').addEventListener('click', async ()=>{
       const display_name = $('inpNickname').value.trim();
       const titleVal     = $('selTitles').value || '';
       let   avatar_url   = null;
   
-      // 1) Avatar → GCS
+      // 1) avatar → GCS
       if(avatarFile){
         try{
           const up = await signAndUploadToGCS(avatarFile, email);
@@ -364,19 +417,19 @@
         }
       }
   
-      // 2) Update profilu
+      // 2) update profilu
       try{
         const payload = { display_name };
         if(avatar_url) payload.avatar_url = avatar_url;
         if(titleVal)   payload.titles = [titleVal];
   
-        const r = await fetch('/api/me/update?email='+encodeURIComponent(email),{
+        let r = await fetch('/api/me/update?email='+encodeURIComponent(email),{
           method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)
         });
-        const j = await r.json().catch(()=> ({}));
+        let j = await r.json().catch(()=> ({}));
         if(!r.ok || !j?.ok) throw new Error(j?.error||'Uložení profilu selhalo');
   
-        // Lokální sync → ať avatar “zůstává”
+        // sync do LS, ať avatar/jméno “zůstává”
         try{
           const auth = App.auth() || {};
           auth.profile = { ...(auth.profile||{}),
@@ -387,32 +440,48 @@
           localStorage.setItem('animecloud_auth', JSON.stringify(auth));
         }catch{}
   
-        // UI refresh + cache bust
-        const newName = (payload.display_name || (ME?.display_name) || email);
+        // UI refresh + cache-bust
+        const newName = payload.display_name || (ME?.display_name) || email;
         $('acc-nickname').textContent = newName;
         $('prev-name').textContent    = newName;
         if(avatar_url){
           const bust = avatar_url + `?ts=${Date.now()}`;
-          $('acc-avatar').innerHTML = `<img id="acc-avatar-img" src="${bust}" alt="avatar">`;
+          $('acc-avatar').innerHTML = `<img id="acc-avatar-img" src="${bust}" data-base="${avatar_url}" alt="avatar">`;
           addAvatarFallback($('acc-avatar-img'));
-          showPrevAvatar(bust, email[0]);
-          addAvatarFallback($('prev-avatar'));
+          $('prev-avatar').setAttribute('data-base', avatar_url);
+          $('prev-avatar').src = bust; addAvatarFallback($('prev-avatar'));
         }
   
         App.toast('✅ Profil uložen','ok');
         avatarFile=null; $('inpAvatar').value='';
+  
       }catch(e){
-        App.toast(e.message || '❌ Uložení profilu selhalo','error');
+        // legacy fallback (kdyby endpoint zatím nebyl nasazen)
+        try{
+          if(!token) throw new Error('Chybí token – přihlas se znovu.');
+          const patch={}; if(display_name) patch.nickname=display_name; if(avatar_url) patch.avatar=avatar_url; if(titleVal) patch.secondaryTitle=titleVal;
+          const body={ email, token, profile: patch };
+          const r=await fetch(App.api('/auth/update_profile'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+          const p=await r.json().catch(()=> ({}));
+          if(!r.ok||!p?.ok) throw 0;
+          const auth=App.auth()||{}; auth.profile={...(auth.profile||{}),...(p.profile||patch)}; localStorage.setItem('animecloud_auth',JSON.stringify(auth));
+          App.toast('✅ Profil uložen (fallback)','ok');
+          avatarFile=null; $('inpAvatar').value='';
+        }catch{
+          App.toast(e.message || '❌ Uložení profilu selhalo','error');
+        }
       }
     });
   
-    // === Otevřít veřejný profil ===
+    // otevřít veřejný profil
     $('btnViewPublic').addEventListener('click', ()=>{
       const s = (ME?.slug) || (email.split('@')[0]);
       window.open(`/u/${encodeURIComponent(s)}`,'_blank');
     });
   
-    // === Změna hesla (modal) ===
+    /* =========================
+       ZMĚNA HESLA (modal)
+       ========================= */
     const modalOpen  = ()=> $('pwdModal').style.display='flex';
     const modalClose = ()=> $('pwdModal').style.display='none';
     $('btnChangePwd').addEventListener('click', modalOpen);
@@ -422,13 +491,23 @@
       const new1 = $('pwd-new1').value.trim();
       const new2 = $('pwd-new2').value.trim();
       if(!oldp || !new1 || new1!==new2){ App.toast('Zkontroluj hesla','error'); return; }
+  
       try{
-        const r = await fetch('/auth/change_password',{
+        // preferované parametry
+        let r = await fetch('/auth/change_password',{
           method:'POST', headers:{'Content-Type':'application/json'},
           body: JSON.stringify({ email, old: oldp, new: new1 })
         });
+        if(!r.ok){
+          // fallback starší verze
+          r = await fetch('/auth/change_password',{
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({ email, old_password: oldp, new_password: new1, token })
+          });
+        }
         const j = await r.json().catch(()=> ({}));
         if(!r.ok || !j?.ok) throw new Error(j?.error||'Změna hesla selhala');
+  
         App.toast('Heslo bylo změněno','ok');
         $('pwd-old').value=''; $('pwd-new1').value=''; $('pwd-new2').value='';
         modalClose();
@@ -437,9 +516,10 @@
       }
     });
   
-    // === Logout ===
+    // logout
     $('btnLogout').addEventListener('click', ()=> App.logout());
   </script>
 </body>
 </html>
+
 
