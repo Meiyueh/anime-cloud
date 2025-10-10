@@ -1,224 +1,152 @@
 # ac/me.py
-from __future__ import annotations
-import os, json, secrets, time, re
-from typing import Optional, Dict, Any
-from http.cookies import SimpleCookie
+import os, json, glob, re, time
+from datetime import datetime
 
-# ENV overrides
-USERS_DIR = os.environ.get("AC_USERS_DIR", os.path.join("data", "users"))
+USERS_DIR = os.getenv("AC_USERS_DIR", "private/users")
+os.makedirs(USERS_DIR, exist_ok=True)
 
-# --- Helpers ---------------------------------------------------------------
+def _email_to_path(email:str) -> str:
+    email = (email or "").strip().lower()
+    if not email: return ""
+    if not email.endswith(".json"): email += ".json"
+    # žádné lomítko
+    email = email.replace("/", "_")
+    return os.path.join(USERS_DIR, email)
 
-def _ensure_users_dir():
-    os.makedirs(USERS_DIR, exist_ok=True)
-
-def _user_path(slug: str) -> str:
-    return os.path.join(USERS_DIR, f"{slug}.json")
-
-def _load_user(slug: str) -> Optional[Dict[str, Any]]:
-    p = _user_path(slug)
-    if not os.path.exists(p):
+def _load_user_by_email(email:str):
+    p = _email_to_path(email)
+    if not p or not os.path.exists(p):
         return None
-    try:
-        with open(p, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return None
+    with open(p, "r", encoding="utf-8") as f:
+        return json.load(f)
 
-def _atomic_save_json(path: str, data: Dict[str, Any]):
-    tmp = f"{path}.tmp"
+def _save_user_by_email(email:str, data:dict):
+    p = _email_to_path(email)
+    tmp = p + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, path)
+    os.replace(tmp, p)
+    return True
 
-def _now_iso() -> str:
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+def _find_user_by_slug(slug:str):
+    slug = (slug or "").strip().lower()
+    for path in glob.glob(os.path.join(USERS_DIR, "*.json")):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                u = json.load(f)
+            if (u.get("slug") or "").lower() == slug:
+                email = os.path.basename(path)[:-5]
+                return email, u
+        except: pass
+    return None, None
 
-def _rand_token(nbytes: int = 24) -> str:
-    return secrets.token_urlsafe(nbytes)
+def _extract_identity(handler):
+    """
+    Vrátí (email, slug).
+    - zkus 'Authorization: Bearer <email|slug>'
+    - zkus cookie 'ac_user=<slug>'
+    - fallback: None
+    """
+    # Authorization
+    auth = handler.headers.get("Authorization") or ""
+    m = re.match(r"Bearer\s+(.+)", auth, flags=re.I)
+    if m:
+        token = m.group(1).strip()
+        if "@" in token:
+            return token, token.split("@")[0]
+        # token je slug -> najdi email
+        email, data = _find_user_by_slug(token)
+        if email: return email, token
 
-# snažíme se zjistit přihlášeného uživatele vícero cestami,
-# abychom nemuseli sahat do tvého auth modulu; pokud máš v auth něco svého,
-# můžeš to sem snadno doplnit.
-def _get_me_slug(handler) -> Optional[str]:
-    # 1) Pokud tvůj modul auth nabízí funkci, použij ji
-    try:
-        from ac import auth  # už ho stejně máš
-        # zkus běžné varianty
-        for fn in ("get_current_user_slug", "current_user_slug", "get_me_slug", "whoami_slug"):
-            f = getattr(auth, fn, None)
-            if callable(f):
-                slug = f(handler)
-                if slug:
-                    return str(slug).strip().lower()
-    except Exception:
-        pass
+    # Cookie (hodně na hrubo)
+    cookie = handler.headers.get("Cookie") or ""
+    m2 = re.search(r"\bac_user=([^;]+)", cookie)
+    if m2:
+        slug = m2.group(1)
+        email, _ = _find_user_by_slug(slug)
+        if email: return email, slug
 
-    # 2) Authorization: Bearer <slug> (fallback pro dev)
-    authz = handler.headers.get("Authorization") or ""
-    if authz.lower().startswith("bearer "):
-        slug = authz.split(" ", 1)[1].strip()
-        if slug:
-            return slug.lower()
+    return None, None
 
-    # 3) Cookie ac_user=<slug>
-    cookie = handler.headers.get("Cookie")
-    if cookie:
-        c = SimpleCookie()
-        c.load(cookie)
-        if "ac_user" in c:
-            slug = (c["ac_user"].value or "").strip()
-            if slug:
-                return slug.lower()
+def _public_me(email, data):
+    slug = data.get("slug") or (email.split("@")[0] if email else "")
+    display = data.get("display_name") or data.get("nickname") or email
+    avatar = data.get("avatar_url") or data.get("avatar") or ""
+    joined = data.get("joined_at") or data.get("created_at")
 
-    return None
+    # pokud není znám created_at, dotvoř z mtime souboru
+    if not joined:
+        p = _email_to_path(email)
+        try:
+            ts = os.path.getmtime(p)
+            joined = datetime.utcfromtimestamp(ts).isoformat() + "Z"
+        except:
+            joined = None
 
-# validace a sanitizace
-def _sanitize_links(links: Dict[str, Any]) -> Dict[str, str]:
-    out = {}
-    for k in ("kick", "steam", "web", "twitter", "youtube"):
-        v = links.get(k)
-        if not v:
-            continue
-        v = str(v).strip()
-        if not re.match(r"^https?://", v):
-            # povolíme i relativní (např. /profiles/..), ale nic jiného
-            if not v.startswith("/"):
-                continue
-        out[k] = v
-    return out
-
-# sjednotíme výstup pro account.html (me)
-def _build_me_payload(u: Dict[str, Any]) -> Dict[str, Any]:
     return {
-        "uid": u.get("uid") or u.get("id") or u.get("slug"),
-        "slug": u.get("slug"),
-        "display_name": u.get("display_name") or u.get("slug"),
-        "avatar_url": u.get("avatar_url") or "/assets/default-avatar.png",
-        "bio": u.get("bio") or "",
-        "joined_at": u.get("joined_at") or u.get("created_at"),
-        "created_at": u.get("created_at"),
-        "visibility": (u.get("visibility") or "private").lower(),
-        "profile_share_token": u.get("profile_share_token") or "",
-        "stats": u.get("stats") or {"uploads": 0, "favorites": 0},
-        "badges": u.get("badges") or [],
-        "links": u.get("links") or {}
+        "email": email,
+        "slug": slug,
+        "display_name": display,
+        "avatar_url": avatar,
+        "joined_at": joined,
+        "created_at": data.get("created_at") or joined,
+        "visibility": data.get("visibility","private"),
+        "titles": data.get("titles") or ([data["title"]] if data.get("title") else []),
+        "stats": data.get("stats") or {"uploads": 0, "favorites": 0},
     }
 
-# --- Handlery --------------------------------------------------------------
+def handle_me_get(handler, parsed):
+    email, slug = _extract_identity(handler)
+    if not email:
+        return handler._json(401, {"ok": False, "error": "unauthorized"})
+    data = _load_user_by_email(email) or {}
+    # zajistit slug/email uvnitř souboru
+    if not data.get("slug"):
+        data["slug"] = slug or email.split("@")[0]
+    if not data.get("email"):
+        data["email"] = email
+    return handler._json(200, {"ok": True, "me": _public_me(email, data)})
 
-def handle_me_get(handler, parsed_url):
-    """
-    GET /api/me
-    Vrací {"me": {...}} nebo 401.
-    """
-    slug = _get_me_slug(handler)
-    if not slug:
-        return handler._json(401, {"error": "unauthorized"})
-    u = _load_user(slug)
-    if not u:
-        return handler._json(404, {"error": "user_not_found"})
-    if not u.get("joined_at") and u.get("created_at"):
-        u["joined_at"] = u["created_at"]
-    return handler._json(200, {"me": _build_me_payload(u)})
-
-def handle_me_update(handler, parsed_url):
-    """
-    POST /api/me/update
-    Body JSON:
-      { display_name?, avatar_url?, bio?, links?{kick,steam,web,twitter,youtube} }
-    """
-    slug = _get_me_slug(handler)
-    if not slug:
-        return handler._json(401, {"error": "unauthorized"})
-    u = _load_user(slug)
-    if not u:
-        return handler._json(404, {"error": "user_not_found"})
-
+def handle_me_update(handler, parsed):
     body = handler._read_body() or {}
-    display_name = str(body.get("display_name") or "").strip()
-    avatar_url   = str(body.get("avatar_url") or "").strip()
-    bio          = str(body.get("bio") or "").strip()
-    links        = body.get("links") or {}
+    email, slug = _extract_identity(handler)
+    if not email:
+        return handler._json(401, {"ok": False, "error": "unauthorized"})
 
+    data = _load_user_by_email(email) or {}
+    data.setdefault("email", email)
+    data.setdefault("slug", slug or email.split("@")[0])
+
+    # povolené patche
+    display_name = (body.get("display_name") or "").strip()
     if display_name:
-        u["display_name"] = display_name[:80]
-    if avatar_url:
-        # povolíme pouze http(s) nebo relativní url
-        if re.match(r"^https?://", avatar_url) or avatar_url.startswith("/"):
-            u["avatar_url"] = avatar_url[:512]
-    u["bio"] = bio[:1000] if bio else ""
+        data["display_name"] = display_name
 
-    if isinstance(links, dict):
-        u["links"] = _sanitize_links(links)
+    if body.get("avatar_url"):
+        data["avatar_url"] = body["avatar_url"]
 
-    # inicializace některých polí
-    u.setdefault("slug", slug)
-    u.setdefault("uid", slug)
-    u.setdefault("created_at", _now_iso())
-    u.setdefault("stats", {"uploads": 0, "favorites": 0})
-    u.setdefault("badges", [])
+    titles = body.get("titles")
+    if isinstance(titles, list):
+        data["titles"] = titles
+    elif isinstance(body.get("title"), str):
+        data["title"] = body["title"]
 
-    _ensure_users_dir()
-    _atomic_save_json(_user_path(slug), u)
-    return handler._json(200, {"ok": True, "me": _build_me_payload(u)})
+    # fallback inicializace created_at
+    if not data.get("created_at") and not data.get("joined_at"):
+        data["created_at"] = datetime.utcnow().isoformat() + "Z"
 
-def handle_me_visibility(handler, parsed_url):
-    """
-    POST /api/me/profile_visibility
-    Body JSON: { visibility: "public"|"private"|"link" }
-    Vrací { ok: true, profile_share_token? }
-    """
-    slug = _get_me_slug(handler)
-    if not slug:
-        return handler._json(401, {"error": "unauthorized"})
-    u = _load_user(slug)
-    if not u:
-        return handler._json(404, {"error": "user_not_found"})
+    _save_user_by_email(email, data)
+    return handler._json(200, {"ok": True, "me": _public_me(email, data)})
 
+def handle_profile_visibility(handler, parsed):
     body = handler._read_body() or {}
-    visibility = str(body.get("visibility") or "").strip().lower()
-    if visibility not in ("public","private","link"):
-        return handler._json(400, {"error": "bad_visibility"})
-
-    u["visibility"] = visibility
-    token_out = None
-    if visibility == "link":
-        # pokud token ještě není, vygenerujeme; nechceme rotaovat bez požadavku
-        if not u.get("profile_share_token"):
-            u["profile_share_token"] = _rand_token(18)
-        token_out = u["profile_share_token"]
-    else:
-        # pro jistotu token necháme uložený (aby nezmizel při dočasném přepnutí),
-        # ale můžeš odkomentovat níže pro jeho smazání:
-        # u["profile_share_token"] = ""
-        pass
-
-    _atomic_save_json(_user_path(slug), u)
-    payload = {"ok": True}
-    if token_out:
-        payload["profile_share_token"] = token_out
-    return handler._json(200, payload)
-
-def handle_me_profile_token(handler, parsed_url):
-    """
-    POST /api/me/profile_token
-    Body JSON: { action: "rotate" }
-    → vygeneruje nový token (zneplatní starý), vrátí { profile_share_token }
-    """
-    slug = _get_me_slug(handler)
-    if not slug:
-        return handler._json(401, {"error": "unauthorized"})
-    u = _load_user(slug)
-    if not u:
-        return handler._json(404, {"error": "user_not_found"})
-
-    body = handler._read_body() or {}
-    action = str(body.get("action") or "").strip().lower()
-    if action != "rotate":
-        return handler._json(400, {"error": "bad_action"})
-
-    u["profile_share_token"] = _rand_token(18)
-    # ponecháme visibility jak je – typicky "link"
-    _atomic_save_json(_user_path(slug), u)
-    return handler._json(200, {"ok": True, "profile_share_token": u["profile_share_token"]})
+    email, slug = _extract_identity(handler)
+    if not email:
+        return handler._json(401, {"ok": False, "error": "unauthorized"})
+    data = _load_user_by_email(email) or {}
+    vis = (body.get("visibility") or "private").lower()
+    if vis not in ("public", "private", "link"):
+        vis = "private"
+    data["visibility"] = vis
+    _save_user_by_email(email, data)
+    return handler._json(200, {"ok": True, "visibility": vis})
