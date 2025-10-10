@@ -47,6 +47,7 @@ def handle_upload(handler):
     Multipart fallback: field 'file' + optional 'path'.
     """
     try:
+        import cgi, io, mimetypes, sys
         fs = cgi.FieldStorage(fp=handler.rfile, headers=handler.headers,
                               environ={'REQUEST_METHOD':'POST',
                                        'CONTENT_TYPE': handler.headers.get('Content-Type')})
@@ -63,11 +64,18 @@ def handle_upload(handler):
         bucket = _get_bucket()
         if bucket:
             blob = bucket.blob(path)
+            # ↓↓↓ minimal cache-busting na straně GCS objektu
+            blob.cache_control = "public, max-age=0, no-cache"
             blob.upload_from_file(io.BytesIO(raw), content_type=ctype)
+            # zajistí zapsání cache_control metadat
+            try:
+                blob.patch()
+            except Exception:
+                pass
             public_url = f"{GCS_PUBLIC_BASE}/{path}"
             return _json(handler, 200, {"ok": True, "url": public_url, "path": path})
         else:
-            # lokální uložení vedle projektu (fallback)
+            # lokální fallback
             root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
             dst = os.path.abspath(os.path.join(root, path))
             os.makedirs(os.path.dirname(dst), exist_ok=True)
@@ -75,6 +83,7 @@ def handle_upload(handler):
                 f.write(raw)
             return _json(handler, 200, {"ok": True, "url": f"/{path}", "path": path})
     except Exception as e:
+        import traceback
         traceback.print_exc()
         return _json(handler, 400, {"ok":False,"error":str(e)})
 
