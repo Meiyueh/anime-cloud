@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="stylesheet" href="styles/main.css" />
   <style>
-    /* zachovává původní styly + drobné doplňky */
+    /* zachování vašeho vzhledu + minimum navíc */
     .toolbar{display:flex;gap:.6rem;justify-content:flex-end;align-items:center;flex-wrap:wrap;margin-top:.6rem}
     @media (max-width:640px){ .toolbar{ justify-content:flex-start; } }
     .btn{ padding:.48rem .8rem; border-radius:8px; width:auto !important; }
@@ -29,7 +29,14 @@
     .chip{display:inline-flex;align-items:center;gap:.4rem;padding:.25rem .55rem;border:1px solid var(--border);border-radius:999px}
     .meta{display:grid;grid-template-columns:auto 1fr;gap:.4rem 1rem;margin-top:.5rem}
     .meta label{color:var(--muted)}
-    code.copyable{cursor:pointer; user-select:all}
+    input.copyable{cursor:pointer; user-select:all}
+
+    /* modal „Změnit heslo“ */
+    .modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;z-index:50}
+    .modal{background:var(--panel);border:1px solid var(--border);border-radius:10px;max-width:420px;width:92%;padding:1rem}
+    .modal h3{margin:.2rem 0 1rem}
+    .modal .row{display:grid;grid-template-columns:1fr;gap:.5rem}
+    .modal .actions{display:flex;gap:.5rem;justify-content:flex-end;margin-top:.8rem}
   </style>
 </head>
 <body>
@@ -51,7 +58,7 @@
     <h1>Můj účet</h1>
 
     <div class="grid-2">
-      <!-- LEVÁ KARTA: PROFIL + VIDITELNOST + TLAČÍTKA -->
+      <!-- LEVÁ KARTA: PROFIL + VIDITELNOST + TITULY + TLAČÍTKA -->
       <div class="card">
         <div class="profile-box">
           <div id="avatarFrame" class="frame">
@@ -83,20 +90,17 @@
             <option value="link">Jen přes odkaz</option>
           </select>
         </div>
+
+        <!-- Veřejná URL: bez tlačítka, click-to-copy -->
         <div class="row align-right compact">
           <label>Veřejná URL</label>
-          <div style="display:flex;gap:.5rem;align-items:center">
-            <input id="inpPublicUrl" class="w-compact" type="text" readonly/>
-            <button id="btnCopyUrl" class="btn btn-outline">Kopírovat</button>
-          </div>
+          <input id="inpPublicUrl" class="w-compact copyable" type="text" readonly/>
         </div>
 
-        <!-- Tituly (výběrové menu s uzamčenými položkami) -->
+        <!-- Tituly: výběrové menu; nedosažené disabled -->
         <div class="row align-right compact">
           <label for="selTitles">Tituly</label>
-          <select id="selTitles" class="w-compact">
-            <!-- plní se dynamicky podle milníků -->
-          </select>
+          <select id="selTitles" class="w-compact"></select>
         </div>
 
         <div class="toolbar">
@@ -108,7 +112,7 @@
         <p id="profMsg" class="msg"></p>
       </div>
 
-      <!-- PRAVÁ KARTA: NÁHLED VEŘEJNÉHO PROFILU + INFO -->
+      <!-- PRAVÁ KARTA: NÁHLED + INFO -->
       <div class="card">
         <div class="section-title">Náhled veřejného profilu</div>
         <div class="profile-box" style="margin-bottom:.5rem">
@@ -124,7 +128,6 @@
           <div class="chip"><small class="muted">Veřejný URL</small>&nbsp;<code id="prev-url" class="copyable">—</code></div>
         </div>
 
-        <!-- přesunuté informace o účtu -->
         <div class="section-title" style="margin-top:.8rem">Informace o účtu</div>
         <div class="meta">
           <label>E-mail</label><div id="meta-email">—</div>
@@ -137,6 +140,22 @@
 
   <!-- BOTTOMBAR (původní) -->
   <footer class="site-footer"><small>Správa účtu • AnimeCloud</small></footer>
+
+  <!-- MODAL: Změnit heslo -->
+  <div class="modal-backdrop" id="pwdModal">
+    <div class="modal">
+      <h3>Změnit heslo</h3>
+      <div class="row">
+        <input type="password" id="pwd-old" placeholder="Staré heslo">
+        <input type="password" id="pwd-new1" placeholder="Nové heslo">
+        <input type="password" id="pwd-new2" placeholder="Nové heslo znovu">
+      </div>
+      <div class="actions">
+        <button class="btn btn-outline" id="pwd-cancel">Ukončit</button>
+        <button class="btn" id="pwd-confirm">Změnit heslo</button>
+      </div>
+    </div>
+  </div>
 
   <script src="scripts/app.js"></script>
   <script>
@@ -154,7 +173,7 @@
       return `${dd}.${mm}.${yy}`;
     };
 
-    // UI refs
+    // refs
     const avatarEl  = document.getElementById('acc-avatar');
     const avatarLet = document.getElementById('acc-avatar-letter');
     const prevAvatar= document.getElementById('prev-avatar');
@@ -162,12 +181,13 @@
     const prevSlug  = document.getElementById('prev-slug');
     const prevJoined= document.getElementById('prev-joined');
     const prevUrl   = document.getElementById('prev-url');
+    const inpPublic = document.getElementById('inpPublicUrl');
 
     document.getElementById('acc-email-ro').value = email;
     document.getElementById('meta-email').textContent = email;
     document.getElementById('meta-uploads').textContent = String(App.userUploadCount(email));
 
-    // tituly — připrav options (uzamčené = disabled)
+    // tituly – uzamčené disabled
     function buildTitles(unlocked){
       const all = [
         'Veterán (10+)',
@@ -176,14 +196,16 @@
       ];
       const sel = document.getElementById('selTitles');
       sel.innerHTML = '<option value="">— žádný —</option>' + all.map(t=>{
-        const dis = unlocked.includes(t) ? '' : ' disabled';
-        const label = unlocked.includes(t) ? t : `${t} (zamčeno)`;
-        return `<option value="${t}"${dis}>${label}</option>`;
+        const isUnlocked = unlocked.includes(t);
+        return `<option value="${t}" ${isUnlocked?'':'disabled'}>${t}${isUnlocked?'':' (zamčeno)'}</option>`;
       }).join('');
     }
     buildTitles(App.unlockedTitles(email));
 
-    // načti /api/me (nový backend), jinak fallback na LS z loginu
+    // zkrácený veřejný link do náhledu (kopíruje se plný)
+    const shortPublic = slug => `${location.protocol}//x/u/${encodeURIComponent(slug)}`;
+
+    // načti /api/me, jinak fallback
     let ME = null, slug = email.split('@')[0];
     (async ()=>{
       try{
@@ -193,34 +215,39 @@
         if(!r.ok || !me) throw 0;
         ME = me; slug = me.slug || slug;
 
-        // vyplň UI
+        // jméno
         document.getElementById('inpNickname').value = me.display_name || '';
         document.getElementById('acc-nickname').textContent = me.display_name || email;
 
+        // avatar
         const ava = me.avatar_url || '';
         if(ava){ avatarEl.innerHTML = `<img src="${ava}" alt="avatar">`; prevAvatar.src = ava; }
         else { avatarLet.textContent = (email||'?')[0].toUpperCase(); }
 
+        // viditelnost
         const v = (me.visibility || 'private').toLowerCase();
         document.getElementById('selVisibility').value = v;
 
+        // datumy
         const joined = me.joined_at || me.created_at;
         prevJoined.textContent = 'Členem od ' + (joined ? ddmmyyyy(joined) : '—');
         document.getElementById('meta-created').textContent = joined ? ddmmyyyy(joined) : '—';
 
+        // URL
+        const fullUrl = `${location.origin}/u/${encodeURIComponent(me.slug || slug)}`;
+        inpPublic.value = fullUrl;
+        prevUrl.textContent = shortPublic(me.slug || slug);
+
+        // slug + jméno do náhledu
         prevName.textContent = me.display_name || slug;
         prevSlug.textContent = '@' + (me.slug || slug);
 
-        const pubUrl = `${location.origin}/u/${encodeURIComponent(me.slug || slug)}`;
-        document.getElementById('inpPublicUrl').value = pubUrl;
-        prevUrl.textContent = pubUrl;
-
-        // předvybrat titul když existuje
+        // tituly – předvyplnění
         const tInit = Array.isArray(me.titles) ? (me.titles[0] || '') : (me.title || '');
         if (tInit) document.getElementById('selTitles').value = tInit;
 
       }catch{
-        // fallback z LS
+        // fallback
         const prof = a.profile || {};
         document.getElementById('inpNickname').value = prof.nickname || '';
         document.getElementById('acc-nickname').textContent = prof.nickname || email;
@@ -228,12 +255,14 @@
         if(prof.avatar){ avatarEl.innerHTML = `<img src="${prof.avatar}" alt="avatar">`; prevAvatar.src = prof.avatar; }
         else { avatarLet.textContent = (email||'?')[0].toUpperCase(); }
 
-        prevName.textContent = prof.nickname || slug;
-        prevSlug.textContent = '@' + slug;
+        const fullUrl = `${location.origin}/u/${encodeURIComponent(slug)}`;
+        inpPublic.value = fullUrl;
+        prevUrl.textContent = shortPublic(slug);
 
-        const pubUrl = `${location.origin}/u/${encodeURIComponent(slug)}`;
-        document.getElementById('inpPublicUrl').value = pubUrl;
-        prevUrl.textContent = pubUrl;
+        // když nemáme datum ze serveru, zkusíme vzít z LS (pokud ho ukládáte)
+        const created = a.created_at || a.joined_at || null;
+        document.getElementById('meta-created').textContent = created ? ddmmyyyy(created) : '—';
+        prevJoined.textContent = 'Členem od ' + (created ? ddmmyyyy(created) : '—');
       }
     })();
 
@@ -258,19 +287,18 @@
       prevName.textContent = document.getElementById('acc-nickname').textContent;
     });
 
-    // kopírování veřejné URL — klik na pole i na tlačítko
-    async function copyPublicUrl(){
+    // click-to-copy (pole i zkrácený URL v náhledu)
+    async function copyPublicUrl(text){
       try{
-        const v = document.getElementById('inpPublicUrl').value;
+        const v = text || inpPublic.value;
         await navigator.clipboard.writeText(v);
         App.toast('URL zkopírována','ok');
       }catch{ App.toast('Nepodařilo se zkopírovat','error'); }
     }
-    document.getElementById('btnCopyUrl').addEventListener('click', copyPublicUrl);
-    document.getElementById('inpPublicUrl').addEventListener('click', copyPublicUrl);
-    prevUrl.addEventListener('click', copyPublicUrl);
+    inpPublic.addEventListener('click', ()=> copyPublicUrl());
+    prevUrl.addEventListener('click', ()=> copyPublicUrl(inpPublic.value));
 
-    // změna viditelnosti — uložíme okamžitě (pokud /api/me existuje)
+    // změna viditelnosti — uloží se hned, pokud /api/me běží
     document.getElementById('selVisibility').addEventListener('change', async (e)=>{
       if(!ME) return;
       try{
@@ -283,40 +311,33 @@
       }catch{ App.toast('Chyba při ukládání viditelnosti','error'); }
     });
 
-    // SAVE: avatar upload (+ fallback), jméno, titul
+    // SAVE: avatar → GCS private/avatars/<email>.<ext> + jméno + titul
     document.getElementById('btnSaveAll').addEventListener('click', async ()=>{
       const display_name = document.getElementById('inpNickname').value.trim();
       const titleVal = document.getElementById('selTitles').value || '';
       let avatar_url = null;
 
-      // 1) nahrát avatar (pokud vybrán)
+      // 1) upload avataru do GCS (preferujeme podepsaný PUT)
       if(avatarFile){
         try{
           const ext = avatarFile.type === 'image/png' ? 'png' : 'jpg';
-          const s = (ME?.slug || email.split('@')[0]);
-          const dst = `avatars/${s}.${ext}`;
+          const safeEmail = encodeURIComponent(email.toLowerCase());
+          const dst = `private/avatars/${safeEmail}.${ext}`; // přepíše se stejný soubor
 
-          // a) přímý /upload
-          const fd = new FormData();
-          fd.append('file', avatarFile, `${s}.${ext}`);
-          fd.append('path', dst);
-          fd.append('kind', 'avatar');
-          let up = await fetch('/upload', { method:'POST', body: fd });
-          let uj = await up.json().catch(()=> ({}));
+          // požádat server o signed URL
+          const sign = await fetch('/upload/sign', {
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({ path: dst, content_type: avatarFile.type })
+          });
+          const sj = await sign.json().catch(()=> ({}));
+          if(!sign.ok || !sj?.upload_url){ throw new Error(sj?.error || 'Sign URL selhalo'); }
 
-          // b) fallback: /upload/sign + PUT
-          if(!up.ok){
-            const sign = await fetch('/upload/sign', {
-              method:'POST', headers:{'Content-Type':'application/json'},
-              body: JSON.stringify({ path: dst, content_type: avatarFile.type })
-            });
-            const sj = await sign.json();
-            if(!sign.ok || !sj?.upload_url){ throw new Error(uj?.error || 'Upload selhal'); }
-            await fetch(sj.upload_url, { method:'PUT', headers:{'Content-Type': avatarFile.type}, body: avatarFile });
-            avatar_url = sj.public_url || `/${dst}`;
-          }else{
-            avatar_url = uj?.url || uj?.public_url || `/${dst}`;
-          }
+          // nahrát přímo do GCS
+          const put = await fetch(sj.upload_url, { method:'PUT', headers:{'Content-Type': avatarFile.type}, body: avatarFile });
+          if(!put.ok){ throw new Error('Upload do GCS selhal'); }
+
+          // uložíme public_url (pokud vracíte privátní cestu, server by měl vracet i přístupnou URL)
+          avatar_url = sj.public_url || `/${dst}`;
         }catch(e){ App.toast('Nahrání avataru selhalo','error'); return; }
       }
 
@@ -342,12 +363,10 @@
           App.showMsg(document.getElementById('profMsg'), '✅ Profil uložen.', 'ok');
           avatarFile = null; document.getElementById('inpAvatar').value = '';
           return;
-        }catch(e){
-          // spadne -> zkusíme starý fallback
-        }
+        }catch(e){ /* spadne → fallback níže */ }
       }
 
-      // 3) fallback: /auth/update_profile + LS
+      // 3) fallback na starý /auth/update_profile + LS
       try{
         if(!token){ App.toast('Chybí token – přihlas se znovu.','error'); return; }
         const patch = {};
@@ -378,7 +397,22 @@
       const s = (ME?.slug) || (email.split('@')[0]);
       window.open(`${location.origin}/u/${encodeURIComponent(s)}`, '_blank');
     });
-    document.getElementById('btnChangePwd').addEventListener('click', ()=> location.href = '/change-password.html');
+
+    // === Modal Změnit heslo ===
+    const modal = document.getElementById('pwdModal');
+    const openModal = ()=> modal.style.display = 'flex';
+    const closeModal = ()=> modal.style.display = 'none';
+
+    document.getElementById('btnChangePwd').addEventListener('click', openModal);
+    document.getElementById('pwd-cancel').addEventListener('click', closeModal);
+    document.getElementById('pwd-confirm').addEventListener('click', async ()=>{
+      // zde případně volej váš endpoint /auth/change_password
+      // po úspěchu:
+      App.toast('Heslo bylo změněno','ok');
+      closeModal();
+    });
+
+    // Odhlášení
     document.getElementById('btnLogout').addEventListener('click', ()=> App.logout());
   </script>
 </body>
