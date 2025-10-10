@@ -29,7 +29,6 @@
     .meta label{color:var(--muted)}
     input.copyable{cursor:pointer; user-select:all}
 
-    /* modal „Změnit heslo“ */
     .modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;z-index:50}
     .modal{background:var(--panel);border:1px solid var(--border);border-radius:10px;max-width:420px;width:92%;padding:1rem}
     .modal h3{margin:.2rem 0 1rem}
@@ -55,7 +54,6 @@
     <h1>Můj účet</h1>
 
     <div class="grid-2">
-      <!-- LEVÁ KARTA -->
       <div class="card">
         <div class="profile-box">
           <div id="avatarFrame" class="frame">
@@ -86,13 +84,11 @@
           </select>
         </div>
 
-        <!-- Veřejná URL: bez tlačítka, click-to-copy -->
         <div class="row align-right compact">
           <label>Veřejná URL</label>
           <input id="inpPublicUrl" class="w-compact copyable" type="text" readonly/>
         </div>
 
-        <!-- Tituly: výběr s uzamčenými položkami -->
         <div class="row align-right compact">
           <label for="selTitles">Tituly</label>
           <select id="selTitles" class="w-compact"></select>
@@ -107,7 +103,6 @@
         <p id="profMsg" class="msg"></p>
       </div>
 
-      <!-- PRAVÁ KARTA -->
       <div class="card">
         <div class="section-title">Náhled veřejného profilu</div>
         <div class="profile-box" style="margin-bottom:.5rem">
@@ -131,7 +126,6 @@
 
   <footer class="site-footer"><small>Správa účtu • AnimeCloud</small></footer>
 
-  <!-- MODAL: Změnit heslo -->
   <div class="modal-backdrop" id="pwdModal">
     <div class="modal">
       <h3>Změnit heslo</h3>
@@ -164,7 +158,6 @@
       return String(d.getDate()).padStart(2,'0')+"."+String(d.getMonth()+1).padStart(2,'0')+"."+d.getFullYear();
     };
 
-    // Tituly (zamčené = disabled)
     function buildTitles(unlocked){
       const all = ['Veterán (10+)', 'Mistr Uploader (50+)', 'Legenda (100+)'];
       const sel = document.getElementById('selTitles');
@@ -175,7 +168,6 @@
     }
     buildTitles(App.unlockedTitles(email));
 
-    // zástupci na prvky
     const avatarEl  = document.getElementById('acc-avatar');
     const avatarLet = document.getElementById('acc-avatar-letter');
     const prevAvatar= document.getElementById('prev-avatar');
@@ -198,14 +190,13 @@
         }
       })();
     }
-
-    // click-to-copy
     inpPublic.addEventListener('click', ()=> copyTextHard(inpPublic.value));
 
-    // načti /api/me (bere datumy z private/users/*.json)
+    // === /api/me?email=... – abychom nedostali 401 ===
     (async ()=>{
       try{
-        const r = await fetch('/api/me'); const j = await r.json();
+        const r = await fetch('/api/me?email='+encodeURIComponent(email));
+        const j = await r.json();
         if(!r.ok || !j?.me) throw 0;
         ME = j.me; slug = ME.slug || slug;
 
@@ -222,9 +213,7 @@
         document.getElementById('meta-created').textContent = joined ? ddmmyyyy(joined) : '—';
         prevJoined.textContent = 'Členem od ' + (joined ? ddmmyyyy(joined) : '—');
 
-        const fullUrl = `${location.origin}/u/${encodeURIComponent(slug)}`;
-        inpPublic.value = fullUrl;
-
+        inpPublic.value = `${location.origin}/u/${encodeURIComponent(slug)}`;
         prevName.textContent = ME.display_name || slug;
         prevSlug.textContent = '@' + slug;
 
@@ -243,7 +232,6 @@
       }
     })();
 
-    // avatar upload – click + preview
     avatarEl.addEventListener('click', ()=> document.getElementById('inpAvatar').click());
     let avatarFile=null;
     document.getElementById('inpAvatar').addEventListener('change', ()=>{
@@ -257,44 +245,57 @@
       r.readAsDataURL(f);
     });
 
-    // live preview jména
     document.getElementById('inpNickname').addEventListener('input', ()=>{
       const v=document.getElementById('inpNickname').value.trim();
       document.getElementById('acc-nickname').textContent = v || (ME?.display_name) || email;
       prevName.textContent = document.getElementById('acc-nickname').textContent;
     });
 
-    // viditelnost – uložit hned (pokud /api/me existuje)
     document.getElementById('selVisibility').addEventListener('change', async (e)=>{
-      if(!ME) return;
       try{
-        const r=await fetch('/api/me/profile_visibility',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({visibility:e.target.value})});
+        const r=await fetch('/api/me/profile_visibility?email='+encodeURIComponent(email),{
+          method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({visibility:e.target.value})
+        });
         if(!r.ok) throw 0; App.toast('Viditelnost uložena','ok');
       }catch{ App.toast('Chyba při ukládání viditelnosti','error'); }
     });
 
-    // sign + upload pomocná funkce (bere různé klíče)
     async function signAndUploadToGCS(file, dst){
-      const bodies = [
-        { path: dst, content_type: file.type },
-        { path: dst, ctype: file.type },
-        { path: dst, type: file.type },
-      ];
-      let sj=null, res=null;
-      for(const b of bodies){
-        res = await fetch('/upload/sign',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});
-        try{ sj = await res.json(); }catch{ sj=null; }
-        if(res.ok && sj && (sj.upload_url || sj.signed_url)) break;
+      // nejdřív zkus signed URL
+      try{
+        const bodies = [
+          { path: dst, content_type: file.type },
+          { path: dst, ctype: file.type },
+          { path: dst, type: file.type },
+        ];
+        let sj=null, res=null;
+        for(const b of bodies){
+          res = await fetch('/upload/sign',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});
+          try{ sj = await res.json(); }catch{ sj=null; }
+          if(res.ok && sj && (sj.upload_url || sj.signed_url)) break;
+        }
+        if(res?.ok && sj){
+          const upURL = sj.upload_url || sj.signed_url;
+          const pub   = sj.public_url || sj.url || `/${dst}`;
+          const put = await fetch(upURL,{method:'PUT',headers:{'Content-Type':file.type},body:file});
+          if(!put.ok) throw new Error('Upload do GCS selhal');
+          return pub;
+        }
+        throw new Error('sign failed');
+      }catch(e){
+        // fallback: multipart /upload
+        const fd = new FormData();
+        const ext = file.type === 'image/png' ? 'png' : 'jpg';
+        fd.append('file', file, 'avatar.'+ext);
+        fd.append('path', dst);
+        const r = await fetch('/upload', { method:'POST', body: fd });
+        const j = await r.json().catch(()=> ({}));
+        if(!r.ok || !j?.ok) throw new Error(j?.error || 'Upload selhal');
+        return j.url || `/${dst}`;
       }
-      if(!res?.ok || !sj) throw new Error(sj?.error||'Sign selhalo');
-      const upURL = sj.upload_url || sj.signed_url;
-      const pub   = sj.public_url || sj.url || `/${dst}`;
-      const put = await fetch(upURL,{method:'PUT',headers:{'Content-Type':file.type},body:file});
-      if(!put.ok) throw new Error('Upload do GCS selhal');
-      return pub;
     }
 
-    // ULOŽIT ZMĚNY
     document.getElementById('btnSaveAll').addEventListener('click', async ()=>{
       const display_name = document.getElementById('inpNickname').value.trim();
       const titleVal = document.getElementById('selTitles').value || '';
@@ -309,39 +310,41 @@
         }catch(e){ App.toast('Nahrání avataru selhalo','error'); return; }
       }
 
-      if(ME){
-        try{
-          const payload = { display_name };
-          if(avatar_url) payload.avatar_url = avatar_url;
-          if(titleVal) payload.titles = [titleVal];
-          const r = await fetch('/api/me/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-          const j = await r.json().catch(()=> ({}));
-          if(!r.ok) throw new Error(j?.error||'Uložení profilu selhalo');
-          ME = j.me || ME;
-          if(avatar_url){ prevAvatar.src = avatar_url + `?ts=${Date.now()}`; }
-          document.getElementById('acc-nickname').textContent = ME.display_name || display_name || email;
-          prevName.textContent = document.getElementById('acc-nickname').textContent;
-          App.showMsg(document.getElementById('profMsg'),'✅ Profil uložen.','ok');
-          avatarFile=null; document.getElementById('inpAvatar').value='';
-          return;
-        }catch(e){}
-      }
-
-      // fallback na starý /auth/update_profile
+      // prefer /api/me/update (bere ?email=)
       try{
-        if(!token){ App.toast('Chybí token – přihlas se znovu.','error'); return; }
-        const patch={}; if(display_name) patch.nickname=display_name; if(avatar_url) patch.avatar=avatar_url; if(titleVal) patch.secondaryTitle=titleVal;
-        const body={ email, token, profile: patch };
-        const r=await fetch(App.api('/auth/update_profile'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-        const p=await r.json().catch(()=> ({}));
-        if(!r.ok||!p?.ok) throw 0;
-        const auth=App.auth()||{}; auth.profile={...(auth.profile||{}),...(p.profile||patch)}; localStorage.setItem('animecloud_auth',JSON.stringify(auth));
-        App.showMsg(document.getElementById('profMsg'),'✅ Profil uložen (fallback).','ok');
+        const payload = { display_name };
+        if(avatar_url) payload.avatar_url = avatar_url;
+        if(titleVal) payload.titles = [titleVal];
+        const r = await fetch('/api/me/update?email='+encodeURIComponent(email),{
+          method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)
+        });
+        const j = await r.json().catch(()=> ({}));
+        if(!r.ok) throw new Error(j?.error||'Uložení profilu selhalo');
+        ME = j.me || ME;
+        if(avatar_url){ prevAvatar.src = avatar_url + `?ts=${Date.now()}`; }
+        document.getElementById('acc-nickname').textContent = ME.display_name || display_name || email;
+        prevName.textContent = document.getElementById('acc-nickname').textContent;
+        App.showMsg(document.getElementById('profMsg'),'✅ Profil uložen.','ok');
         avatarFile=null; document.getElementById('inpAvatar').value='';
-      }catch{ App.showMsg(document.getElementById('profMsg'),'❌ Uložení profilu selhalo.','err'); }
+        return;
+      }catch(e){
+        // fallback: /auth/update_profile (když ho máš)
+        try{
+          if(!token){ throw new Error('Chybí token – přihlas se znovu.'); }
+          const patch={}; if(display_name) patch.nickname=display_name; if(avatar_url) patch.avatar=avatar_url; if(titleVal) patch.secondaryTitle=titleVal;
+          const body={ email, token, profile: patch };
+          const r=await fetch(App.api('/auth/update_profile'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+          const p=await r.json().catch(()=> ({}));
+          if(!r.ok||!p?.ok) throw 0;
+          const auth=App.auth()||{}; auth.profile={...(auth.profile||{}),...(p.profile||patch)}; localStorage.setItem('animecloud_auth',JSON.stringify(auth));
+          App.showMsg(document.getElementById('profMsg'),'✅ Profil uložen (fallback).','ok');
+          avatarFile=null; document.getElementById('inpAvatar').value='';
+        }catch{
+          App.showMsg(document.getElementById('profMsg'),'❌ Uložení profilu selhalo.','err');
+        }
+      }
     });
 
-    // Zobrazit veřejný profil
     document.getElementById('btnViewPublic').addEventListener('click', ()=>{
       const s = (ME?.slug) || (email.split('@')[0]);
       window.open(`${location.origin}/u/${encodeURIComponent(s)}`,'_blank');
@@ -366,7 +369,6 @@
       }catch(e){ App.toast(e.message||'Chyba při změně hesla','error'); }
     });
 
-    // Odhlášení
     document.getElementById('btnLogout').addEventListener('click', ()=> App.logout());
   </script>
 </body>
