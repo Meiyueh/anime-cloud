@@ -1,5 +1,5 @@
 # ac/me.py
-import os, json, glob, re
+import os, json, glob, re, sys
 from datetime import datetime
 from urllib.parse import urlparse, parse_qs
 
@@ -13,12 +13,69 @@ def _email_to_path(email:str) -> str:
     email = email.replace("/", "_")
     return os.path.join(USERS_DIR, email)
 
+def _safe_mtime_iso(path:str):
+    try:
+        ts = os.path.getmtime(path)
+        return datetime.utcfromtimestamp(ts).isoformat() + "Z"
+    except Exception:
+        return None
+
+def _normalize_user(email:str, data:dict, path:str) -> tuple[dict, bool]:
+    """Doplní chybějící pole u starých záznamů. Vrací (data, changed)."""
+    changed = False
+    email = (email or data.get("email") or "").lower()
+
+    # slug
+    if not data.get("slug"):
+        data["slug"] = (email.split("@")[0] if email else (data.get("name") or "")).lower()
+        changed = True
+
+    # display_name
+    if not data.get("display_name"):
+        # preferuj 'name' (starý formát), jinak e-mail
+        data["display_name"] = data.get("name") or email
+        changed = True
+
+    # visibility
+    if not data.get("visibility"):
+        data["visibility"] = "private"   # konzervativně
+        changed = True
+
+    # stats
+    if not isinstance(data.get("stats"), dict):
+        data["stats"] = {"uploads": 0, "favorites": 0}
+        changed = True
+
+    # joined/created
+    if not (data.get("joined_at") or data.get("created_at")):
+        mt = _safe_mtime_iso(path) if path else None
+        if mt:
+            data["joined_at"] = mt
+            data["created_at"] = mt
+            changed = True
+
+    # email uvnitř
+    if email and data.get("email") != email:
+        data["email"] = email
+        changed = True
+
+    return data, changed
+
 def _load_user_by_email(email:str):
     p = _email_to_path(email)
     if not p or not os.path.exists(p):
         return None
-    with open(p, "r", encoding="utf-8") as f:
-        return json.load(f)
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as e:
+        print(f"[ME] WARN: JSON read failed for {p}: {e}", file=sys.stderr)
+        data = {}
+    # auto-migrace
+    new_data, changed = _normalize_user(email, data, p)
+    if changed:
+        _save_user_by_email(email, new_data)
+    return new_data
 
 def _save_user_by_email(email:str, data:dict):
     p = _email_to_path(email)
@@ -29,38 +86,38 @@ def _save_user_by_email(email:str, data:dict):
     return True
 
 def _find_user_by_slug(slug:str):
-    """Najde uživatele podle slug. Pokud slug v JSON chybí, bere prefix e-mailu před @."""
+    """Najde uživatele podle slugu. Pokud slug v JSON chyběl, po normalizaci odpovídá prefixu před @."""
     slug = (slug or "").strip().lower()
     for path in glob.glob(os.path.join(USERS_DIR, "*.json")):
         try:
             with open(path, "r", encoding="utf-8") as f:
                 u = json.load(f)
-            u_slug = (u.get("slug") or "").lower()
-            if not u_slug:
-                # fallback: email prefix
-                base = os.path.basename(path)[:-5]  # xxx@yyy.zzz
-                u_slug = base.split("@")[0].lower()
-            if u_slug == slug:
-                email = os.path.basename(path)[:-5]
-                return email, u
-        except:
-            pass
+        except Exception:
+            u = {}
+        # odvoď email z názvu souboru
+        base = os.path.basename(path)[:-5]
+        email = base
+        # auto-migrace na čtení
+        u, ch = _normalize_user(email, u, path)
+        if ch:
+            # zapiš změny
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(u, f, ensure_ascii=False, indent=2)
+            os.replace(tmp, path)
+        # test shody
+        u_slug = (u.get("slug") or base.split("@")[0]).lower()
+        if u_slug == slug:
+            return email, u
     return None, None
 
-def _public_me(email, data):
+def _public_me(email, data, path=None):
     slug = data.get("slug") or (email.split("@")[0] if email else "")
-    display = data.get("display_name") or data.get("nickname") or email
+    display = data.get("display_name") or data.get("nickname") or data.get("name") or email
     avatar = data.get("avatar_url") or data.get("avatar") or ""
     joined = data.get("joined_at") or data.get("created_at")
-
-    if not joined:
-        # fallback z mtime souboru
-        p = _email_to_path(email)
-        try:
-            ts = os.path.getmtime(p)
-            joined = datetime.utcfromtimestamp(ts).isoformat() + "Z"
-        except:
-            joined = None
+    if not joined and path:
+        joined = _safe_mtime_iso(path)
 
     return {
         "email": email,
@@ -76,7 +133,6 @@ def _public_me(email, data):
 
 def _extract_identity(handler):
     """Pokus o identitu z Authorization: Bearer <email|slug> nebo X-Auth-Email."""
-    # Authorization
     auth = handler.headers.get("Authorization") or ""
     m = re.match(r"Bearer\s+(.+)", auth, flags=re.I)
     if m:
@@ -86,7 +142,6 @@ def _extract_identity(handler):
         email, data = _find_user_by_slug(token)
         if email: return email, token
 
-    # Custom hlavička (volitelně)
     xemail = handler.headers.get("X-Auth-Email") or ""
     if xemail:
         return xemail, xemail.split("@")[0] if "@" in xemail else xemail
@@ -94,10 +149,7 @@ def _extract_identity(handler):
     return None, None
 
 def handle_me_get(handler, parsed):
-    # 1) standardně – z headerů
     email, slug = _extract_identity(handler)
-
-    # 2) fallback – z query param ?email=...
     if not email:
         qs = parse_qs(parsed.query or "")
         qemail = (qs.get("email") or [None])[0]
@@ -108,36 +160,31 @@ def handle_me_get(handler, parsed):
     if not email:
         return handler._json(401, {"ok": False, "error": "unauthorized"})
 
+    p = _email_to_path(email)
     data = _load_user_by_email(email) or {}
-    # zajistit slug/email uvnitř souboru
-    if not data.get("slug"):
-        data["slug"] = slug or email.split("@")[0]
-    if not data.get("email"):
-        data["email"] = email
-
-    return handler._json(200, {"ok": True, "me": _public_me(email, data)})
+    return handler._json(200, {"ok": True, "me": _public_me(email, data, p)})
 
 def handle_me_update(handler, parsed):
     body = handler._read_body() or {}
     email, slug = _extract_identity(handler)
 
-    # povolíme i ?email=...
     if not email:
         qs = parse_qs(parsed.query or "")
         email = (qs.get("email") or [None])[0]
-        slug = email.split("@")[0] if (email and "@" in email) else slug
+        slug  = email.split("@")[0] if (email and "@" in email) else slug
 
     if not email:
         return handler._json(401, {"ok": False, "error": "unauthorized"})
 
+    p = _email_to_path(email)
     data = _load_user_by_email(email) or {}
     data.setdefault("email", email)
-    data.setdefault("slug", slug or email.split("@")[0])
+    data, ch = _normalize_user(email, data, p)
 
-    # patche
-    display_name = (body.get("display_name") or "").strip()
-    if display_name:
-        data["display_name"] = display_name
+    # patche z těla
+    dn = (body.get("display_name") or "").strip()
+    if dn:
+        data["display_name"] = dn
 
     if body.get("avatar_url"):
         data["avatar_url"] = body["avatar_url"]
@@ -152,17 +199,18 @@ def handle_me_update(handler, parsed):
         data["created_at"] = datetime.utcnow().isoformat() + "Z"
 
     _save_user_by_email(email, data)
-    return handler._json(200, {"ok": True, "me": _public_me(email, data)})
+    return handler._json(200, {"ok": True, "me": _public_me(email, data, p)})
 
 def handle_profile_visibility(handler, parsed):
     body = handler._read_body() or {}
-    email, slug = _extract_identity(handler)
+    email, _ = _extract_identity(handler)
     if not email:
-        # povolit i ?email=...
         qs = parse_qs(parsed.query or "")
         email = (qs.get("email") or [None])[0]
     if not email:
         return handler._json(401, {"ok": False, "error": "unauthorized"})
+
+    p = _email_to_path(email)
     data = _load_user_by_email(email) or {}
     vis = (body.get("visibility") or "private").lower()
     if vis not in ("public", "private", "link"):
