@@ -6,14 +6,7 @@ from urllib.parse import urlparse
 # Importy modulů (načtou i .env přes settings)
 from ac import settings
 from ac import auth, uploads, anime, feedback
-
-# server.py (výřez)
-from flask import Flask
-app = Flask(__name__, static_folder=".", static_url_path="")
-
-# ⬇️ PŘIDEJ: import a registrace blueprintu
-from ac.profile import bp_profiles
-app.register_blueprint(bp_profiles)
+from ac import profile_http   # ⬅️ PŘIDÁNO
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -59,11 +52,20 @@ class Handler(SimpleHTTPRequestHandler):
     def do_GET(self):
         try:
             p = urlparse(self.path)
+
+            # --- NOVÉ PROFILOVÉ ENDPOINTY ---
+            if p.path.startswith("/api/profile/"):
+                return profile_http.handle_profile_api(self, p)
+            if p.path.startswith("/u/"):
+                return profile_http.handle_profile_page(self, p)
+
+            # --- EXISTUJÍCÍ ENDPOINTY ---
             if p.path == "/auth/verify":         return auth.handle_verify(self, p)
             if p.path == "/data/anime.json":     return anime.handle_anime_json(self)
             if p.path == "/uploads/counts":      return anime.handle_upload_counts(self)
             if p.path == "/stats":               return anime.handle_stats(self)
             if p.path == "/feedback/list":       return feedback.handle_feedback_list(self)
+
             return super().do_GET()
         except Exception as e:
             traceback.print_exc()
@@ -102,4 +104,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
