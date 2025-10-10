@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="cs">
+<head>
+  <meta charset="utf-8" />
+  <title>Profil • AnimeCloud</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/styles/main.css" />
+  <style>
+    .container{max-width:820px;margin:24px auto;padding:0 16px}
+    .cover{display:flex;gap:16px;align-items:center}
+    .avatar{width:96px;height:96px;border-radius:50%;object-fit:cover;border:1px solid var(--border)}
+    .muted{color:var(--muted)}
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <a href="/index.html" class="brand"><img src="/assets/logo.svg" alt="AnimeCloud" /></a>
+    <nav class="top-nav">
+      <a href="/index.html">Info</a>
+      <a href="/anime.html">Anime</a>
+      <a href="/account.html">Účet</a>
+    </nav>
+  </header>
+
+  <main class="container">
+    <div class="cover">
+      <img id="ava" class="avatar" src="/assets/default-avatar.png" alt="avatar">
+      <div>
+        <h1 id="dn" style="margin:.2rem 0">—</h1>
+        <div class="muted" id="slug">@—</div>
+        <div class="muted" id="joined">Členem od —</div>
+      </div>
+    </div>
+  </main>
+
+  <footer class="site-footer"><small>AnimeCloud</small></footer>
+
+  <script>
+    const slug = "{{SLUG}}";
+    function ddmmyyyy(iso){
+      if(!iso) return '—';
+      const d = new Date(iso);
+      const dd = String(d.getDate()).padStart(2,'0');
+      const mm = String(d.getMonth()+1).padStart(2,'0');
+      const yy = d.getFullYear();
+      return `${dd}.${mm}.${yy}`;
+    }
+    fetch(`/api/profile/${encodeURIComponent(slug)}`).then(r=>r.json()).then(j=>{
+      if(!j.ok) throw 0;
+      const p = j.profile;
+      document.getElementById('ava').src = p.avatar_url || '/assets/default-avatar.png';
+      document.getElementById('dn').textContent = p.display_name || slug;
+      document.getElementById('slug').textContent = '@'+(p.slug||slug);
+      document.getElementById('joined').textContent = 'Členem od '+ddmmyyyy(p.joined_at);
+    }).catch(()=>{ document.body.innerHTML = "<h1>Profil nenalezen</h1>"; });
+  </script>
+</body>
+</html>
