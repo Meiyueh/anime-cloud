@@ -45,17 +45,23 @@ def _read_json_gcs(path):
         print(f"[PROFILE] WARN: read json {path} failed: {e}", file=sys.stderr)
         return None
 
-def _write_json_gcs(path, data:dict):
+def _write_json_gcs(path, data: dict):
     b = _get_bucket()
-    payload = json.dumps(data, ensure_ascii=False, indent=2)
+    payload = json.dumps(data, ensure_ascii=False, indent=2)  # <- STRING
     if b:
-        blob = b.blob(path)
-        blob.cache_control = "public, max-age=0, no-cache"
-        blob.content_type  = "application/json; charset=utf-8"
-        blob.upload_from_string(payload)
-        try: blob.patch()
-        except: pass
-        return True
+        try:
+            blob = b.blob(path)
+            blob.cache_control = "public, max-age=0, no-cache"
+            # KLÍČOVÉ: content_type přímo v uploadu
+            blob.upload_from_string(payload, content_type="application/json; charset=utf-8")
+            try:
+                blob.patch()
+            except Exception:
+                pass
+            return True
+        except Exception as e:
+            print(f"[PROFILE] ERROR: write json {path} failed: {e}", file=sys.stderr)
+            return False
     # fallback local
     root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     dst  = os.path.join(root, path)
@@ -225,3 +231,4 @@ def handle_profile_page(handler, parsed):
             f"<script>location.href='/api/profile/{safe}'</script>"
         )
     return handler._html(200, tpl.replace("{{SLUG}}", slug))
+
