@@ -4,12 +4,18 @@
   <meta charset="utf-8" />
   <title>Profil • AnimeCloud</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- sdílíme existující téma -->
   <link rel="stylesheet" href="/styles/main.css" />
   <style>
-    .container{max-width:820px;margin:24px auto;padding:0 16px}
+    .container{max-width:980px;margin:24px auto;padding:0 16px}
     .cover{display:flex;gap:16px;align-items:center}
-    .avatar{width:96px;height:96px;border-radius:50%;object-fit:cover;border:1px solid var(--border);background:var(--border)}
+    .avatar{width:96px;height:96px;border-radius:50%;object-fit:cover;border:1px solid var(--border)}
+    .ava-fallback{width:96px;height:96px;border-radius:50%;display:none;align-items:center;justify-content:center;
+      background:var(--border); color:var(--brand); font-weight:700; font-size:32px; border:1px solid var(--border)}
     .muted{color:var(--muted)}
+    .badges{display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.4rem}
+    .chip{border:1px solid var(--border);border-radius:999px;padding:.15rem .55rem}
+    .notice{margin-top:1rem;padding:.6rem .8rem;border:1px dashed var(--border);border-radius:10px;color:var(--muted)}
   </style>
 </head>
 <body>
@@ -24,22 +30,22 @@
 
   <main class="container">
     <div class="cover">
-      <img id="ava" class="avatar" alt="avatar">
+      <img id="ava" class="avatar" src="" alt="avatar" />
+      <div id="avaFallback" class="ava-fallback">?</div>
       <div>
         <h1 id="dn" style="margin:.2rem 0">—</h1>
         <div class="muted" id="slug">@—</div>
         <div class="muted" id="joined">Členem od —</div>
+        <div id="titles" class="badges"></div>
       </div>
     </div>
+    <div id="privateNote" class="notice" style="display:none">Tento profil je aktuálně neveřejný.</div>
   </main>
 
   <footer class="site-footer"><small>AnimeCloud</small></footer>
 
   <script>
-    const slug = "{{SLUG}}";
-    const FALLBACK_SVG = 'data:image/svg+xml;utf8,' + encodeURIComponent(
-      `<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96"><rect width="100%" height="100%" fill="#ccc"/><text x="50%" y="54%" dominant-baseline="middle" text-anchor="middle" font-family="sans-serif" font-size="36">👤</text></svg>`
-    );
+    // Pomůcky
     function ddmmyyyy(iso){
       if(!iso) return '—';
       const d = new Date(iso);
@@ -48,14 +54,60 @@
       const yy = d.getFullYear();
       return `${dd}.${mm}.${yy}`;
     }
-    fetch(`/api/profile/${encodeURIComponent(slug)}`).then(r=>r.json()).then(j=>{
-      if(!j.ok) throw 0;
-      const p = j.profile;
-      document.getElementById('ava').src = p.avatar_url || FALLBACK_SVG;
-      document.getElementById('dn').textContent = p.display_name || slug;
-      document.getElementById('slug').textContent = '@'+(p.slug||slug);
-      document.getElementById('joined').textContent = 'Členem od '+ddmmyyyy(p.joined_at);
-    }).catch(()=>{ document.body.innerHTML = "<h1>Profil nenalezen</h1>"; });
+    function byId(id){ return document.getElementById(id); }
+
+    // Slug z URL
+    const slug = decodeURIComponent(location.pathname.replace(/^.*\/u\//,'').replace(/\/.*$/,''));
+
+    async function loadProfile(){
+      try{
+        const r = await fetch(`/api/profile/${encodeURIComponent(slug)}`);
+        const j = await r.json();
+        if(!j.ok){ throw new Error('not found'); }
+        const p = j.profile || {};
+
+        // Jméno a slug
+        byId('dn').textContent = p.display_name || slug;
+        byId('slug').textContent = '@' + (p.slug || slug);
+        byId('joined').textContent = 'Členem od ' + ddmmyyyy(p.joined_at);
+
+        // Tituly
+        const tWrap = byId('titles');
+        tWrap.innerHTML = '';
+        (p.titles || []).forEach(t=>{
+          const s = document.createElement('span');
+          s.className = 'chip';
+          s.textContent = t;
+          tWrap.appendChild(s);
+        });
+
+        // Avatar + fallback iniciála
+        const img = byId('ava');
+        const fb  = byId('avaFallback');
+        const initial = (p.display_name || p.slug || '?').trim()[0]?.toUpperCase() || '?';
+
+        if (p.avatar_url && p.avatar_url.trim() !== ''){
+          img.src = p.avatar_url + (p.avatar_url.includes('?') ? '&' : '?') + 'ts=' + Date.now();
+          img.style.display = '';
+          fb.style.display  = 'none';
+          img.onerror = ()=>{ img.style.display='none'; fb.textContent=initial; fb.style.display='flex'; };
+        } else {
+          img.style.display = 'none';
+          fb.textContent = initial;
+          fb.style.display = 'flex';
+        }
+
+        // Viditelnost (jen info)
+        if ((p.visibility||'public') !== 'public'){
+          byId('privateNote').style.display = '';
+        }
+      }catch(e){
+        document.body.innerHTML =
+          "<main class='container'><h1>Profil nenalezen</h1><p class='muted'>Zkontroluj prosím adresu.</p></main>";
+      }
+    }
+
+    loadProfile();
   </script>
 </body>
 </html>
