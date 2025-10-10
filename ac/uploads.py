@@ -1,101 +1,96 @@
-from . import gcs, settings
-from .utils import safe_name, guess_mime
-import cgi
+# ac/uploads.py
+import os, io, json, cgi, mimetypes, traceback
+from datetime import timedelta
+from google.cloud import storage
 
-def _parse_multipart(handler):
-    env = {
-        'REQUEST_METHOD': 'POST',
-        'CONTENT_TYPE': handler.headers.get('Content-Type', ''),
-        'CONTENT_LENGTH': handler.headers.get('Content-Length', '0'),
-    }
-    fs = cgi.FieldStorage(fp=handler.rfile, headers=handler.headers, environ=env, keep_blank_values=True)
-    out={}
-    if fs and fs.list:
-        for item in fs.list:
-            if not item.name: continue
-            if item.filename:
-                out[item.name]={"filename": item.filename, "file": item.file}
-            else:
-                out[item.name]=item.value
-    return out
+BUCKET_NAME = os.getenv("GCS_BUCKET", "")
+GCS_PUBLIC_BASE = f"https://storage.googleapis.com/{BUCKET_NAME}" if BUCKET_NAME else ""
 
-def handle_upload_sign(h):
-    d = h._read_body() or {}
-    anime   = (d.get("anime") or "").strip().lower()
-    episode = int(str(d.get("episode") or "0"))
-    quality = (d.get("quality") or "").strip()
+def _json(handler, code, obj): return handler._json(code, obj)
 
-    video_name = safe_name(d.get("videoName") or "")
-    video_type = d.get("videoType") or "video/mp4"
-    subs_name  = safe_name(d.get("subsName") or "") if d.get("subsName") else None
-    subs_type  = d.get("subsType") or "application/x-subrip"
-
-    if not anime or not episode or not quality or not video_name:
-        return h._json(400, {"ok": False, "error": "missing_fields"})
-
-    ep_folder = f"{int(episode):05d}"
-    video_path = f"anime/{anime}/{ep_folder}/{quality}/{video_name}"
-    subs_path  = f"anime/{anime}/{ep_folder}/{quality}/{subs_name}" if subs_name else None
-
+def _get_bucket():
+    if not BUCKET_NAME:
+        return None
     try:
-        v_signed = gcs.signed_put_url(video_path, video_type, minutes=60)
-        s_signed = gcs.signed_put_url(subs_path, subs_type, minutes=60) if subs_path else None
-        return h._json(200, {
-            "ok": True,
-            "video": {"put_url": v_signed, "public_url": gcs.public_url(video_path), "content_type": video_type},
-            "subs":  ({"put_url": s_signed, "public_url": gcs.public_url(subs_path), "content_type": subs_type} if s_signed else None)
-        })
+        client = storage.Client()
+        return client.bucket(BUCKET_NAME)
+    except Exception:
+        return None
+
+def handle_upload_sign(handler):
+    """POST JSON: { path, content_type | ctype | type } → { upload_url, public_url }"""
+    try:
+        body = handler._read_body() or {}
+        path = (body.get("path") or "").lstrip("/")
+        ctype = body.get("content_type") or body.get("ctype") or body.get("type") or "application/octet-stream"
+        if not path:
+            return _json(handler, 400, {"ok": False, "error": "missing path"})
+        bucket = _get_bucket()
+        if not bucket:
+            return _json(handler, 400, {"ok": False, "error": "bucket not configured"})
+        blob = bucket.blob(path)
+        upload_url = blob.generate_signed_url(
+            version="v4", expiration=timedelta(minutes=15), method="PUT",
+            content_type=ctype
+        )
+        public_url = f"{GCS_PUBLIC_BASE}/{path}" if GCS_PUBLIC_BASE else f"/{path}"
+        return _json(handler, 200, {"ok": True, "upload_url": upload_url, "public_url": public_url})
     except Exception as e:
-        return h._json(500, {"ok": False, "error": f"sign_failed: {e.__class__.__name__}: {e}"})
+        traceback.print_exc()
+        return _json(handler, 400, {"ok": False, "error": str(e)})
 
-def handle_upload(h):
-    ctype = h.headers.get("Content-Type","")
-    if not ctype.startswith("multipart/form-data"):
-        return h._json(400, {"ok": False, "error": "expected_multipart"})
+def handle_upload(handler):
+    """
+    Multipart upload pro jednoduché případy:
+      - pole: file (binary), path (volitelné), kind (volitelné)
+      - když je GCS nakonfig., uloží do GCS; jinak uloží lokálně vedle serveru
+    """
+    try:
+        fs = cgi.FieldStorage(fp=handler.rfile, headers=handler.headers,
+                              environ={'REQUEST_METHOD':'POST',
+                                       'CONTENT_TYPE': handler.headers.get('Content-Type')})
+        fileitem = fs['file'] if 'file' in fs else None
+        path = fs.getfirst('path') if 'path' in fs else None
+        if not fileitem or not fileitem.file:
+            return _json(handler, 400, {"ok":False, "error":"missing file"})
+        filename = fileitem.filename or "upload.bin"
+        raw = fileitem.file.read()
+        ctype = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+        if not path:
+            path = f"uploads/{filename}"
 
-    form = _parse_multipart(h)
-    anime   = (form.get("anime") or "").strip().lower()
-    episode = int(form.get("episode") or 0)
-    quality = (form.get("quality") or "").strip()
-    v_item  = form.get("video")
-    s_item  = form.get("subs")
+        bucket = _get_bucket()
+        if bucket:
+            blob = bucket.blob(path)
+            blob.upload_from_file(io.BytesIO(raw), content_type=ctype)
+            public_url = f"{GCS_PUBLIC_BASE}/{path}"
+            return _json(handler, 200, {"ok": True, "url": public_url, "path": path})
+        else:
+            # lokální fallback
+            dst = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", path)
+            dst = os.path.abspath(dst)
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            with open(dst, "wb") as f:
+                f.write(raw)
+            return _json(handler, 200, {"ok": True, "url": f"/{path}", "path": path})
+    except Exception as e:
+        traceback.print_exc()
+        return _json(handler, 400, {"ok":False,"error":str(e)})
 
-    vname = safe_name(form.get("videoName") or (v_item or {}).get("filename") or "video.mp4")
-    if "." not in vname: vname += ".mp4"
-    sname = safe_name(form.get("subsName")  or (s_item or {}).get("filename") or "subs.srt")
-
-    if not anime or not episode or not quality or not v_item:
-        return h._json(400, {"ok": False, "error": "missing_fields"})
-
-    ep_folder = f"{int(episode):05d}"
-    v_mime = guess_mime(vname, default="video/mp4")
-    s_mime = guess_mime(sname, default="application/x-subrip")
-
-    v_path = f"anime/{anime}/{ep_folder}/{quality}/{vname}"
-    s_path = f"anime/{anime}/{ep_folder}/{quality}/{sname}"
-
-    v_blob = gcs.bucket().blob(v_path); v_blob.cache_control="public, max-age=31536000, immutable"
-    v_file = v_item["file"]; v_file.seek(0)
-    v_blob.upload_from_file(v_file, content_type=v_mime, rewind=True)
-
-    s_url = None
-    if s_item:
-        s_blob = gcs.bucket().blob(s_path); s_blob.cache_control="public, max-age=31536000, immutable"
-        s_file = s_item["file"]; s_file.seek(0)
-        s_blob.upload_from_file(s_file, content_type=s_mime, rewind=True)
-        s_url = gcs.public_url(s_path)
-
-    return h._json(200, {"ok": True, "video": gcs.public_url(v_path), "subs": s_url})
-
-def handle_delete_file(h):
-    d = h._read_body()
-    anime = (d.get("anime") or "").strip().lower()
-    episode = int(d.get("episode") or 0)
-    quality = (d.get("quality") or "").strip()
-    name = safe_name(d.get("videoName") or "")
-    if not anime or not episode or not quality or not name:
-        return h._json(400, {"ok":False,"error":"Missing"})
-    ep_folder = f"{int(episode):05d}"
-    path = f"anime/{anime}/{ep_folder}/{quality}/{name}"
-    ok = gcs.delete(path)
-    return h._json(200 if ok else 404, {"ok":ok})
+def handle_delete_file(handler):
+    try:
+        body = handler._read_body() or {}
+        path = (body.get("path") or "").lstrip("/")
+        if not path:
+            return _json(handler, 400, {"ok":False,"error":"missing path"})
+        bucket = _get_bucket()
+        if bucket:
+            blob = bucket.blob(path)
+            blob.delete(if_generation_match=None)  # best effort
+            return _json(handler, 200, {"ok": True})
+        # local fallback
+        dst = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", path))
+        if os.path.exists(dst): os.remove(dst)
+        return _json(handler, 200, {"ok": True})
+    except Exception as e:
+        return _json(handler, 400, {"ok":False,"error":str(e)})
