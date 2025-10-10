@@ -10,9 +10,14 @@ def _find_user_by_slug(slug):
         try:
             with open(path, "r", encoding="utf-8") as f:
                 u = json.load(f)
-            if (u.get("slug") or "").lower() == slug:
+            u_slug = (u.get("slug") or "").lower()
+            if not u_slug:
+                base = os.path.basename(path)[:-5]
+                u_slug = base.split("@")[0].lower()
+            if u_slug == slug:
                 return u
-        except: pass
+        except:
+            pass
     return None
 
 def handle_profile_api(handler, parsed):
@@ -21,9 +26,9 @@ def handle_profile_api(handler, parsed):
     if not u:
         return handler._json(404, {"ok":False,"error":"user not found"})
     pub = {
-        "slug": u.get("slug"),
-        "display_name": u.get("display_name") or u.get("nickname") or u.get("email"),
-        "avatar_url": u.get("avatar_url") or u.get("avatar") or "/assets/default-avatar.png",
+        "slug": u.get("slug") or slug,
+        "display_name": u.get("display_name") or u.get("nickname") or u.get("email") or slug,
+        "avatar_url": u.get("avatar_url") or u.get("avatar") or "",  # žádný default soubor
         "joined_at": u.get("joined_at") or u.get("created_at"),
         "titles": u.get("titles") or ([u["title"]] if u.get("title") else []),
         "visibility": u.get("visibility","public")
@@ -36,10 +41,8 @@ def handle_profile_page(handler, parsed):
         with open(PROFILE_HTML, "r", encoding="utf-8") as f:
             html = f.read()
     except FileNotFoundError:
-        # fallback HTML (když chybí profile.html)
         return handler._html(200, f"<!doctype html><meta charset='utf-8'><title>@{slug}</title>"
                                f"<h1 style='font:16px sans-serif'>Načítám profil @{slug}…</h1>"
                                f"<script>location.href='/api/profile/{slug}'</script>")
-    # do šablony jen vložíme slug; zbytek si načte JS
     html = html.replace("{{SLUG}}", slug)
     return handler._html(200, html)
