@@ -45,23 +45,29 @@ def _gcs_read_json(path:str):
         print(f"[ME] WARN: read json {path} failed: {e}", file=sys.stderr)
         return None
 
-def _gcs_write_json(path:str, data:dict):
+def _gcs_write_json(path: str, data: dict):
     b = _get_bucket()
-    payload = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+    payload = json.dumps(data, ensure_ascii=False, indent=2)  # <- STRING
     if b:
-        blob = b.blob(path)
-        # ať se nelepí cache
-        blob.cache_control = "public, max-age=0, no-cache"
-        blob.content_type = "application/json; charset=utf-8"
-        blob.upload_from_string(payload.decode("utf-8"))
-        try: blob.patch()
-        except: pass
-        return True
+        try:
+            blob = b.blob(path)
+            # ať se nelepí cache
+            blob.cache_control = "public, max-age=0, no-cache"
+            # KLÍČOVÉ: předej content_type do uploadu (media část)
+            blob.upload_from_string(payload, content_type="application/json; charset=utf-8")
+            try:
+                blob.patch()  # uloží cache_control
+            except Exception:
+                pass
+            return True
+        except Exception as e:
+            print(f"[ME] ERROR: write json {path} failed: {e}", file=sys.stderr)
+            return False
     # lokální fallback
     root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     dst  = os.path.join(root, path)
     os.makedirs(os.path.dirname(dst), exist_ok=True)
-    with open(dst, "wb") as f:
+    with open(dst, "w", encoding="utf-8") as f:
         f.write(payload)
     return True
 
@@ -311,3 +317,4 @@ def handle_profile_visibility(handler, parsed):
     data["visibility"] = vis
     _gcs_write_json(key, data)
     return handler._json(200, {"ok": True, "visibility": vis})
+
