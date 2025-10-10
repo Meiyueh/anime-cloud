@@ -1,124 +1,233 @@
 # ac/me.py
-import os, json, glob, re, sys
-from datetime import datetime
+import os, json, re, sys
+from datetime import datetime, timezone
 from urllib.parse import urlparse, parse_qs
 
-USERS_DIR = os.getenv("AC_USERS_DIR", "private/users")
-os.makedirs(USERS_DIR, exist_ok=True)
+# === Konfigurace ===
+USERS_PREFIX = os.getenv("USERS_JSON_CLOUD", "private/users").strip("/")
 
-def _email_to_path(email:str) -> str:
+# GCS klient (lazy)
+_GCS_CLIENT = None
+_GCS_BUCKET = None
+GCS_BUCKET_NAME = os.getenv("GCS_BUCKET", "").strip()
+
+def _get_bucket():
+    global _GCS_CLIENT, _GCS_BUCKET
+    if not GCS_BUCKET_NAME:
+        return None
+    if _GCS_BUCKET is not None:
+        return _GCS_BUCKET
+    try:
+        from google.cloud import storage
+        _GCS_CLIENT = storage.Client()
+        _GCS_BUCKET = _GCS_CLIENT.bucket(GCS_BUCKET_NAME)
+        return _GCS_BUCKET
+    except Exception as e:
+        print(f"[ME] WARN: GCS unavailable: {e}", file=sys.stderr)
+        return None
+
+# === Utility: cesty/serializace ===
+def _email_key(email:str) -> str:
     email = (email or "").strip().lower()
     if not email: return ""
     if not email.endswith(".json"): email += ".json"
-    email = email.replace("/", "_")
-    return os.path.join(USERS_DIR, email)
+    return f"{USERS_PREFIX}/{email}"
 
-def _safe_mtime_iso(path:str):
+def _gcs_read_json(path:str):
+    b = _get_bucket()
+    if not b: return None
+    blob = b.blob(path)
+    if not blob.exists(): return None
     try:
-        ts = os.path.getmtime(path)
-        return datetime.utcfromtimestamp(ts).isoformat() + "Z"
+        data = blob.download_as_text(encoding="utf-8")
+        return json.loads(data), blob
+    except Exception as e:
+        print(f"[ME] WARN: read json {path} failed: {e}", file=sys.stderr)
+        return None
+
+def _gcs_write_json(path:str, data:dict):
+    b = _get_bucket()
+    payload = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+    if b:
+        blob = b.blob(path)
+        # ať se nelepí cache
+        blob.cache_control = "public, max-age=0, no-cache"
+        blob.content_type = "application/json; charset=utf-8"
+        blob.upload_from_string(payload.decode("utf-8"))
+        try: blob.patch()
+        except: pass
+        return True
+    # lokální fallback
+    root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    dst  = os.path.join(root, path)
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    with open(dst, "wb") as f:
+        f.write(payload)
+    return True
+
+def _local_read_json(path:str):
+    root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    p = os.path.join(root, path)
+    if not os.path.exists(p): return None
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            return json.load(f), None
+    except Exception as e:
+        print(f"[ME] WARN: local read {p} failed: {e}", file=sys.stderr)
+        return None
+
+def _local_mtime_iso(path:str):
+    root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    p = os.path.join(root, path)
+    try:
+        ts = os.path.getmtime(p)
+        return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat().replace("+00:00","Z")
     except Exception:
         return None
 
-def _normalize_user(email:str, data:dict, path:str) -> tuple[dict, bool]:
-    """Doplní chybějící pole u starých záznamů. Vrací (data, changed)."""
-    changed = False
+def _blob_updated_iso(blob):
+    try:
+        # blob.updated je datetime s TZ
+        dt = blob.updated
+        if not dt: return None
+        return dt.astimezone(timezone.utc).isoformat().replace("+00:00","Z")
+    except Exception:
+        return None
+
+# === Normalizace / migrace ===
+def _normalize_user(email:str, data:dict, created_iso:str|None) -> tuple[dict,bool]:
+    changed=False
     email = (email or data.get("email") or "").lower()
 
-    # slug
     if not data.get("slug"):
         data["slug"] = (email.split("@")[0] if email else (data.get("name") or "")).lower()
-        changed = True
-
-    # display_name
+        changed=True
     if not data.get("display_name"):
-        # preferuj 'name' (starý formát), jinak e-mail
         data["display_name"] = data.get("name") or email
-        changed = True
-
-    # visibility
+        changed=True
     if not data.get("visibility"):
-        data["visibility"] = "private"   # konzervativně
-        changed = True
-
-    # stats
+        data["visibility"] = "private"
+        changed=True
     if not isinstance(data.get("stats"), dict):
-        data["stats"] = {"uploads": 0, "favorites": 0}
-        changed = True
-
-    # joined/created
-    if not (data.get("joined_at") or data.get("created_at")):
-        mt = _safe_mtime_iso(path) if path else None
-        if mt:
-            data["joined_at"] = mt
-            data["created_at"] = mt
-            changed = True
-
-    # email uvnitř
+        data["stats"] = {"uploads":0,"favorites":0}
+        changed=True
+    if not (data.get("joined_at") or data.get("created_at")) and created_iso:
+        data["joined_at"] = created_iso
+        data["created_at"] = created_iso
+        changed=True
     if email and data.get("email") != email:
         data["email"] = email
-        changed = True
-
+        changed=True
+    # sjednocení titles
+    if not isinstance(data.get("titles"), list) and isinstance(data.get("title"), str):
+        data["titles"] = [data["title"]]
+        changed=True
     return data, changed
 
+# === Lookupy ===
 def _load_user_by_email(email:str):
-    p = _email_to_path(email)
-    if not p or not os.path.exists(p):
-        return None
-    try:
-        with open(p, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except Exception as e:
-        print(f"[ME] WARN: JSON read failed for {p}: {e}", file=sys.stderr)
-        data = {}
-    # auto-migrace
-    new_data, changed = _normalize_user(email, data, p)
-    if changed:
-        _save_user_by_email(email, new_data)
-    return new_data
+    key = _email_key(email)
+    # GCS
+    g = _gcs_read_json(key)
+    if g:
+        data, blob = g
+        created_iso = _blob_updated_iso(blob)
+        data, changed = _normalize_user(email, data, created_iso)
+        if changed:
+            _gcs_write_json(key, data)
+        return data
 
-def _save_user_by_email(email:str, data:dict):
-    p = _email_to_path(email)
-    tmp = p + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
+    # lokální fallback
+    l = _local_read_json(key)
+    if l:
+        data, _ = l
+        created_iso = _local_mtime_iso(key)
+        data, changed = _normalize_user(email, data, created_iso)
+        if changed:
+            _gcs_write_json(key, data) if _get_bucket() else _local_write_json(key, data)
+        return data
+    return None
+
+def _local_write_json(path:str, data:dict):
+    root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    dst  = os.path.join(root, path)
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    with open(dst, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, p)
-    return True
 
 def _find_user_by_slug(slug:str):
-    """Najde uživatele podle slugu. Pokud slug v JSON chyběl, po normalizaci odpovídá prefixu před @."""
+    """Najde uživatele podle slugu (prefix před @ v názvu souboru) – GCS i lokálně."""
     slug = (slug or "").strip().lower()
-    for path in glob.glob(os.path.join(USERS_DIR, "*.json")):
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                u = json.load(f)
-        except Exception:
-            u = {}
-        # odvoď email z názvu souboru
-        base = os.path.basename(path)[:-5]
-        email = base
-        # auto-migrace na čtení
-        u, ch = _normalize_user(email, u, path)
-        if ch:
-            # zapiš změny
-            tmp = path + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(u, f, ensure_ascii=False, indent=2)
-            os.replace(tmp, path)
-        # test shody
-        u_slug = (u.get("slug") or base.split("@")[0]).lower()
-        if u_slug == slug:
-            return email, u
+    if not slug: return None, None
+
+    # 1) GCS – projít objekty pod prefixem
+    b = _get_bucket()
+    prefix = USERS_PREFIX + "/"
+    if b:
+        for blob in b.list_blobs(prefix=prefix):
+            name = blob.name  # e.g. private/users/user@example.com.json
+            if not name.lower().endswith(".json"): continue
+            base = name.split("/")[-1][:-5].lower()
+            if base.split("@")[0] == slug:
+                # máme kandidáta
+                g = _gcs_read_json(name)
+                data = g[0] if g else {}
+                created_iso = _blob_updated_iso(blob)
+                data, changed = _normalize_user(base, data, created_iso)
+                if changed:
+                    _gcs_write_json(name, data)
+                return base, data
+        # 2) JSON pole "slug"
+        for blob in b.list_blobs(prefix=prefix):
+            if not blob.name.lower().endswith(".json"): continue
+            g = _gcs_read_json(blob.name)
+            if not g: continue
+            data, blob2 = g
+            if (data.get("slug") or "").strip().lower() == slug:
+                base = blob.name.split("/")[-1][:-5].lower()
+                created_iso = _blob_updated_iso(blob)
+                data, changed = _normalize_user(base, data, created_iso)
+                if changed:
+                    _gcs_write_json(blob.name, data)
+                return base, data
+
+    # Lokální fallback – projít soubory
+    root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", USERS_PREFIX))
+    if os.path.isdir(root):
+        for fn in os.listdir(root):
+            if not fn.lower().endswith(".json"): continue
+            base = fn[:-5].lower()
+            if base.split("@")[0] == slug:
+                path = os.path.join(root, fn)
+                try: data = json.load(open(path, encoding="utf-8"))
+                except: data = {}
+                created_iso = _local_mtime_iso(f"{USERS_PREFIX}/{fn}")
+                data, changed = _normalize_user(base, data, created_iso)
+                if changed:
+                    _local_write_json(f"{USERS_PREFIX}/{fn}", data)
+                return base, data
+        # JSON pole "slug"
+        for fn in os.listdir(root):
+            if not fn.lower().endswith(".json"): continue
+            path = os.path.join(root, fn)
+            try: data = json.load(open(path, encoding="utf-8"))
+            except: data = {}
+            if (data.get("slug") or "").strip().lower() == slug:
+                base = fn[:-5].lower()
+                created_iso = _local_mtime_iso(f"{USERS_PREFIX}/{fn}")
+                data, changed = _normalize_user(base, data, created_iso)
+                if changed:
+                    _local_write_json(f"{USERS_PREFIX}/{fn}", data)
+                return base, data
+
     return None, None
 
-def _public_me(email, data, path=None):
+# === Veřejný tvar ===
+def _public_me(email, data):
     slug = data.get("slug") or (email.split("@")[0] if email else "")
     display = data.get("display_name") or data.get("nickname") or data.get("name") or email
     avatar = data.get("avatar_url") or data.get("avatar") or ""
     joined = data.get("joined_at") or data.get("created_at")
-    if not joined and path:
-        joined = _safe_mtime_iso(path)
-
     return {
         "email": email,
         "slug": slug,
@@ -131,8 +240,8 @@ def _public_me(email, data, path=None):
         "stats": data.get("stats") or {"uploads": 0, "favorites": 0},
     }
 
+# === HTTP handlery ===
 def _extract_identity(handler):
-    """Pokus o identitu z Authorization: Bearer <email|slug> nebo X-Auth-Email."""
     auth = handler.headers.get("Authorization") or ""
     m = re.match(r"Bearer\s+(.+)", auth, flags=re.I)
     if m:
@@ -149,57 +258,42 @@ def _extract_identity(handler):
     return None, None
 
 def handle_me_get(handler, parsed):
-    email, slug = _extract_identity(handler)
-    if not email:
-        qs = parse_qs(parsed.query or "")
-        qemail = (qs.get("email") or [None])[0]
-        if qemail:
-            email = qemail
-            slug = email.split("@")[0] if "@" in email else email
-
-    if not email:
-        return handler._json(401, {"ok": False, "error": "unauthorized"})
-
-    p = _email_to_path(email)
-    data = _load_user_by_email(email) or {}
-    return handler._json(200, {"ok": True, "me": _public_me(email, data, p)})
-
-def handle_me_update(handler, parsed):
-    body = handler._read_body() or {}
-    email, slug = _extract_identity(handler)
-
+    email, _ = _extract_identity(handler)
     if not email:
         qs = parse_qs(parsed.query or "")
         email = (qs.get("email") or [None])[0]
-        slug  = email.split("@")[0] if (email and "@" in email) else slug
 
     if not email:
         return handler._json(401, {"ok": False, "error": "unauthorized"})
 
-    p = _email_to_path(email)
     data = _load_user_by_email(email) or {}
-    data.setdefault("email", email)
-    data, ch = _normalize_user(email, data, p)
+    return handler._json(200, {"ok": True, "me": _public_me(email, data)})
 
-    # patche z těla
+def handle_me_update(handler, parsed):
+    body = handler._read_body() or {}
+    email, _ = _extract_identity(handler)
+    if not email:
+        qs = parse_qs(parsed.query or "")
+        email = (qs.get("email") or [None])[0]
+
+    if not email:
+        return handler._json(401, {"ok": False, "error": "unauthorized"})
+
+    key = _email_key(email)
+    # načti stávající
+    current = _load_user_by_email(email) or {"email": email.lower()}
+    # patche
     dn = (body.get("display_name") or "").strip()
-    if dn:
-        data["display_name"] = dn
+    if dn: current["display_name"] = dn
+    if body.get("avatar_url"): current["avatar_url"] = body["avatar_url"]
+    if isinstance(body.get("titles"), list): current["titles"] = body["titles"]
+    if not current.get("created_at") and not current.get("joined_at"):
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00","Z")
+        current["created_at"] = now
+        current["joined_at"]  = now
 
-    if body.get("avatar_url"):
-        data["avatar_url"] = body["avatar_url"]
-
-    titles = body.get("titles")
-    if isinstance(titles, list):
-        data["titles"] = titles
-    elif isinstance(body.get("title"), str):
-        data["title"] = body["title"]
-
-    if not data.get("created_at") and not data.get("joined_at"):
-        data["created_at"] = datetime.utcnow().isoformat() + "Z"
-
-    _save_user_by_email(email, data)
-    return handler._json(200, {"ok": True, "me": _public_me(email, data, p)})
+    _gcs_write_json(key, current)
+    return handler._json(200, {"ok": True, "me": _public_me(email, current)})
 
 def handle_profile_visibility(handler, parsed):
     body = handler._read_body() or {}
@@ -210,11 +304,10 @@ def handle_profile_visibility(handler, parsed):
     if not email:
         return handler._json(401, {"ok": False, "error": "unauthorized"})
 
-    p = _email_to_path(email)
-    data = _load_user_by_email(email) or {}
+    key = _email_key(email)
+    data = _load_user_by_email(email) or {"email": email.lower()}
     vis = (body.get("visibility") or "private").lower()
-    if vis not in ("public", "private", "link"):
-        vis = "private"
+    if vis not in ("public","private","link"): vis = "private"
     data["visibility"] = vis
-    _save_user_by_email(email, data)
+    _gcs_write_json(key, data)
     return handler._json(200, {"ok": True, "visibility": vis})
