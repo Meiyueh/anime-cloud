@@ -7,6 +7,15 @@ from urllib.parse import urlparse
 from ac import settings
 from ac import auth, uploads, anime, feedback
 
+# server.py (výřez)
+from flask import Flask
+app = Flask(__name__, static_folder=".", static_url_path="")
+
+# ⬇️ PŘIDEJ: import a registrace blueprintu
+from ac.profile import bp_profiles
+app.register_blueprint(bp_profiles)
+
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 class Handler(SimpleHTTPRequestHandler):
@@ -93,3 +102,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
