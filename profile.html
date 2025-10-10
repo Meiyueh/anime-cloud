@@ -8,7 +8,7 @@
   <style>
     .container{max-width:820px;margin:24px auto;padding:0 16px}
     .cover{display:flex;gap:16px;align-items:center}
-    .avatar{width:96px;height:96px;border-radius:50%;object-fit:cover;border:1px solid var(--border)}
+    .avatar{width:96px;height:96px;border-radius:50%;object-fit:cover;border:1px solid var(--border);background:var(--border)}
     .muted{color:var(--muted)}
   </style>
 </head>
@@ -24,7 +24,7 @@
 
   <main class="container">
     <div class="cover">
-      <img id="ava" class="avatar" src="/assets/default-avatar.png" alt="avatar">
+      <img id="ava" class="avatar" alt="avatar">
       <div>
         <h1 id="dn" style="margin:.2rem 0">—</h1>
         <div class="muted" id="slug">@—</div>
@@ -37,6 +37,9 @@
 
   <script>
     const slug = "{{SLUG}}";
+    const FALLBACK_SVG = 'data:image/svg+xml;utf8,' + encodeURIComponent(
+      `<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96"><rect width="100%" height="100%" fill="#ccc"/><text x="50%" y="54%" dominant-baseline="middle" text-anchor="middle" font-family="sans-serif" font-size="36">👤</text></svg>`
+    );
     function ddmmyyyy(iso){
       if(!iso) return '—';
       const d = new Date(iso);
@@ -48,7 +51,7 @@
     fetch(`/api/profile/${encodeURIComponent(slug)}`).then(r=>r.json()).then(j=>{
       if(!j.ok) throw 0;
       const p = j.profile;
-      document.getElementById('ava').src = p.avatar_url || '/assets/default-avatar.png';
+      document.getElementById('ava').src = p.avatar_url || FALLBACK_SVG;
       document.getElementById('dn').textContent = p.display_name || slug;
       document.getElementById('slug').textContent = '@'+(p.slug||slug);
       document.getElementById('joined').textContent = 'Členem od '+ddmmyyyy(p.joined_at);
