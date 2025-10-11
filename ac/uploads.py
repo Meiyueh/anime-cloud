@@ -1,7 +1,10 @@
 # ac/uploads.py
 import os, io, json, cgi, mimetypes, traceback, sys
-from datetime import timedelta
+import datetime
+from urllib.parse import quote
 from google.cloud import storage
+from . import settings
+from . import auth
 
 BUCKET_NAME = os.getenv("GCS_BUCKET", "")
 GCS_PUBLIC_BASE = f"https://storage.googleapis.com/{BUCKET_NAME}" if BUCKET_NAME else ""
@@ -20,27 +23,47 @@ def _get_bucket():
         return None
 
 def handle_upload_sign(handler):
-    """POST JSON: { path, content_type | ctype | type } → { upload_url, public_url }"""
     try:
-        body = handler._read_body() or {}
+        body = auth.parse_body(handler.rfile.read(int(handler.headers.get("Content-Length") or 0)), (handler.headers.get("Content-Type") or ""))
         path = (body.get("path") or "").lstrip("/")
-        ctype = body.get("content_type") or body.get("ctype") or body.get("type") or "application/octet-stream"
+        ctype = body.get("contentType") or body.get("content_type") or body.get("ctype") or body.get("type") or "application/octet-stream"
         if not path:
-            print("[UPLOAD] missing path v /upload/sign", file=sys.stderr)
-            return _json(handler, 400, {"ok": False, "error": "missing path"})
-        bucket = _get_bucket()
-        if not bucket:
-            return _json(handler, 400, {"ok": False, "error": "bucket not configured"})
-        blob = bucket.blob(path)
-        upload_url = blob.generate_signed_url(
-            version="v4", expiration=timedelta(minutes=15), method="PUT",
-            content_type=ctype
+            handler.send_response(400); handler.end_headers(); handler.wfile.write(b'{"ok":false,"error":"missing path"}'); return
+
+        client = storage.Client()
+        bkt = client.bucket(settings.GCS_BUCKET)
+        blob = bkt.blob(path)
+
+        # v4 signed URL for PUT s content-type
+        url = blob.generate_signed_url(
+            version="v4",
+            expiration=datetime.timedelta(minutes=10),
+            method="PUT",
+            content_type=ctype,
         )
-        public_url = f"{GCS_PUBLIC_BASE}/{path}" if GCS_PUBLIC_BASE else f"/{path}"
-        return _json(handler, 200, {"ok": True, "upload_url": upload_url, "public_url": public_url})
+
+        public_url = f"https://storage.googleapis.com/{settings.GCS_BUCKET}/{quote(blob.name)}"
+        payload = {
+            "ok": True,
+            "upload_url": url,
+            "public_url": public_url
+        }
+        import json
+        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        handler.send_response(200)
+        handler.send_header("Content-Type","application/json; charset=utf-8")
+        handler.send_header("Content-Length", str(len(data)))
+        handler.end_headers()
+        handler.wfile.write(data)
     except Exception as e:
+        import json, traceback
         traceback.print_exc()
-        return _json(handler, 400, {"ok": False, "error": str(e)})
+        data = json.dumps({"ok":False,"error":str(e)}, ensure_ascii=False).encode("utf-8")
+        handler.send_response(400)
+        handler.send_header("Content-Type","application/json; charset=utf-8")
+        handler.send_header("Content-Length", str(len(data)))
+        handler.end_headers()
+        handler.wfile.write(data)
 
 def handle_upload(handler):
     """
