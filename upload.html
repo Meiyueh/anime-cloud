@@ -221,27 +221,53 @@
       rowSubmit.style.display = (hasVideo && (hasSubs || isAdmin)) ? 'block' : 'none';
     }
 
+    function buildDst({ slug, ep, q, name, kind }) {
+      const epStr = String(ep).padStart(3,'0');
+      if (kind === 'video') {
+        return `public/videos/${slug}/ep${epStr}/${q}/${name}`;
+      }
+      if (kind === 'subs') {
+        return `public/subtitles/${slug}/ep${epStr}/${q}/${name}`;
+      }
+      return `uploads/${slug}/${name}`;
+    }
+    
     // ---- Signed URL helpery
-    async function signUrls({ slug, ep, q, videoOut, vFile, subsOut, sFile }) {
-      const payload = {
-        anime: slug,
-        episode: ep,
-        quality: q,
-        videoName: videoOut,
-        videoType: vFile.type || mimeFromExt(vFile.name) || "video/mp4",
-        ...(sFile ? { subsName: subsOut, subsType: "application/x-subrip" } : {})
-      };
-      const r = await fetch(App.api('/upload/sign'), {
+    async function signUrls({ videoDst, vType, subsDst, sType }) {
+      // VIDEO
+      const rV = await fetch('/upload/sign', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+        body: JSON.stringify({ path: videoDst, contentType: vType })
       });
-      const p = await r.json().catch(()=>null);
-      if (!r.ok || !p?.ok) {
-        const err = (p && p.error) ? p.error : `HTTP ${r.status}`;
-        throw new Error('sign_failed: '+err);
+      const jV = await rV.json().catch(()=>null);
+      if (!rV.ok || !jV?.ok) throw new Error('sign_failed: ' + (jV?.error || `HTTP ${rV.status}`));
+    
+      // SUBS (volitelné)
+      let jS = null;
+      if (subsDst) {
+        const rS = await fetch('/upload/sign', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: subsDst, contentType: sType })
+        });
+        jS = await rS.json().catch(()=>null);
+        if (!rS.ok || !jS?.ok) throw new Error('sign_failed: ' + (jS?.error || `HTTP ${rS.status}`));
       }
-      return p;
+    
+      // sjednocený výstup
+      return {
+        video: {
+          put_url: jV.upload_url,
+          public_url: jV.public_url,
+          content_type: vType
+        },
+        subs: jS ? {
+          put_url: jS.upload_url,
+          public_url: jS.public_url,
+          content_type: sType
+        } : null
+      };
     }
 
     function putWithProgress(url, file, contentType, onProgress) {
@@ -367,3 +393,4 @@
   </script>
 </body>
 </html>
+
