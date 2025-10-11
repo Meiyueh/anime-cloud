@@ -6,7 +6,6 @@ from urllib.parse import urlparse, parse_qs
 # Importy modulů (načtou i .env přes settings)
 from ac import settings
 from ac import auth, uploads, anime, feedback
-from ac import me
 import ac.me as me
 import ac.profile as profile
 
@@ -65,10 +64,6 @@ class Handler(SimpleHTTPRequestHandler):
             if p.path == "/stats":               return anime.handle_stats(self)
             if p.path == "/feedback/list":       return feedback.handle_feedback_list(self)
 
-            # API – nový
-            if p.path == "/api/me":              return me.handle_me_get(self, p)
-            if p.path.startswith("/api/profile/"): return profile.handle_profile_api(self, p)
-
             # Veřejný profil
             if p.path.startswith("/u/"):         return profile.handle_profile_page(self, p)
 
@@ -82,40 +77,28 @@ class Handler(SimpleHTTPRequestHandler):
             p = urlparse(self.path)
 
             if me.route_post(self, p.path): return
-
+    
             # Auth / uploads / admin / feedback
             if p.path == "/auth/register":       return auth.handle_register(self)
             if p.path == "/auth/login":          return auth.handle_login(self)
             if p.path == "/auth/resend":         return auth.handle_resend(self)
             if p.path == "/auth/change_password":return auth.handle_change_password(self)
-
-            # DOPLNĚNO: starý endpoint používá frontend jako fallback
+    
             if p.path == "/auth/update_profile":
-                # pokud v auth není implementace, vrať přátelskou chybu
                 if hasattr(auth, "handle_update_profile"):
                     return auth.handle_update_profile(self)
                 return self._json(404, {"ok":False,"error":"handle_update_profile not implemented"})
-
-            # DOPLNĚNO: změna hesla
-            if p.path == "/auth/change_password":
-                if hasattr(auth, "handle_change_password"):
-                    return auth.handle_change_password(self)
-                return self._json(404, {"ok":False,"error":"handle_change_password not implemented"})
-
+    
             if p.path == "/upload":              return uploads.handle_upload(self)
             if p.path == "/upload/sign":         return uploads.handle_upload_sign(self)
             if p.path == "/delete":              return uploads.handle_delete_file(self)
-
+    
             if p.path == "/admin/add_anime":     return anime.handle_add_anime(self)
             if p.path == "/admin/upload_cover":  return anime.handle_upload_cover(self)
-
+    
             if p.path == "/feedback":            return feedback.handle_feedback_save(self)
             if p.path == "/feedback/update":     return feedback.handle_feedback_update(self)
-
-            # ME API
-            if p.path == "/api/me/update":       return me.handle_me_update(self, p)
-            if p.path == "/api/me/profile_visibility": return me.handle_profile_visibility(self, p)
-
+    
             if p.path == "/wipe_all":            return self._json(200, {"ok":True,"status":"cloud wipe disabled"})
             return self._json(404, {"ok":False,"error":"Not found"})
         except Exception as e:
@@ -132,4 +115,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
