@@ -182,12 +182,16 @@ def _normalize_gcs_path(path_or_url: str, bucket_name: str) -> str:
 def handle_delete_file(handler):
     """
     Smaže jeden nebo více souborů z GCS (nebo lokální fallback).
+    Umí smazat i párové .srt titulky ke smazanému videu (stejný basename).
+
     Přijímané tvary payloadu:
       - {"path": "anime/<slug>/epNNN/<q>/<soubor>"}
       - {"paths": ["anime/...","anime/..."]}
-      - {"url": "https://storage.googleapis.com/<bucket>/anime/..."}  # z URL vytěženo jméno objektu
-      - {"public_url": "..."}                                         # dtto
-      - Legacy: {"anime":"one-piece","episode":45,"quality":"1080p","videoName":"1080p_1.mp4"} (+ volitelně "subsName")
+      - {"url": "https://storage.googleapis.com/<bucket>/anime/..."}  # URL -> key
+      - {"public_url": "..."}                                         # URL -> key
+      - Legacy: {"anime":"one-piece","episode":45,"quality":"1080p","videoName":"1080p_1.mp4"}
+               (+ volitelně "subsName": "1080p_1.srt")
+
     Vrací JSON: { ok, deleted:[...], not_found:[...], errors:[{path,error}] }
     """
     try:
@@ -196,36 +200,36 @@ def handle_delete_file(handler):
         # --- nasbírej kandidáty ---
         candidates = []
 
-        # path (string)
+        # 1) path (string)
         p = body.get("path")
         if isinstance(p, str) and p.strip():
             candidates.append(p.strip())
 
-        # paths (pole)
+        # 2) paths (pole)
         ps = body.get("paths")
         if isinstance(ps, (list, tuple)):
             for it in ps:
                 if isinstance(it, str) and it.strip():
                     candidates.append(it.strip())
 
-        # url / public_url (stringy)
+        # 3) url / public_url (stringy)
         for k in ("url", "public_url"):
             u = body.get(k)
             if isinstance(u, str) and u.strip():
                 candidates.append(u.strip())
 
-        # legacy tvar (video)
+        # 4) legacy tvar (video)
         slug = body.get("slug") or body.get("anime")
         ep   = body.get("episode") or body.get("ep")
         q    = body.get("quality") or body.get("q")
-        name = body.get("name") or body.get("videoName")
-        if slug and ep is not None and q and name:
-            candidates.append(f"anime/{slug}/ep{str(int(ep)).zfill(3)}/{q}/{name}")
+        vname= body.get("name") or body.get("videoName")
+        if slug and ep is not None and q and vname:
+            candidates.append(f"anime/{slug}/ep{str(int(ep)).zfill(3)}/{q}/{vname}")
 
-        # legacy tvar (subs)
-        subs = body.get("subs") or body.get("subsName")
-        if slug and ep is not None and q and subs:
-            candidates.append(f"anime/{slug}/ep{str(int(ep)).zfill(3)}/{q}/{subs}")
+        # 5) legacy tvar (subs explicitně – pokud je uveden)
+        sname = body.get("subs") or body.get("subsName")
+        if slug and ep is not None and q and sname:
+            candidates.append(f"anime/{slug}/ep{str(int(ep)).zfill(3)}/{q}/{sname}")
 
         # --- normalizace: URL -> object name ---
         from urllib.parse import urlparse, unquote
@@ -242,7 +246,6 @@ def handle_delete_file(handler):
                     key = parts[2].lstrip("/")
                     norm.append(unquote(key))
                 else:
-                    # fallback: vezmi celé path bez leading /
                     key = u.path.lstrip("/")
                     if key:
                         norm.append(unquote(key))
@@ -256,9 +259,25 @@ def handle_delete_file(handler):
             else:
                 norm.append(s.lstrip("/"))
 
+        # --- rozšíření o párové .srt titulky ke VIDEÍM ---
+        # Pokud soubor není .srt, přidáme i stejnojmenné .srt ve stejném adresáři.
+        expanded = []
+        for key in norm:
+            if not key:
+                continue
+            expanded.append(key)
+            # přidej párové SRT jen když nejde už o .srt
+            name = key.rsplit("/", 1)[-1]
+            dir_ = key[:-len(name)].rstrip("/")  # prefix s lomítkem nebo prázdný
+            if "." in name:
+                base, ext = name.rsplit(".", 1)
+                if ext.lower() != "srt" and base:
+                    srt_key = (dir_ + "/" if dir_ else "") + base + ".srt"
+                    expanded.append(srt_key)
+
         # deduplikace
         seen = set()
-        paths = [p for p in norm if not (p in seen or seen.add(p))]
+        paths = [p for p in expanded if p and not (p in seen or seen.add(p))]
 
         if not paths:
             return _json(handler, 400, {"ok": False, "error": "missing path"})
@@ -270,7 +289,7 @@ def handle_delete_file(handler):
             try:
                 from google.api_core.exceptions import NotFound
             except Exception:
-                class NotFound(Exception):  # kdyby import selhal, aspoň fallback
+                class NotFound(Exception):
                     pass
 
             for key in paths:
