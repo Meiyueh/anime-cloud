@@ -169,7 +169,33 @@
         return `<option value="${t}" ${ok?'':'disabled'}>${t}${ok?'':' (zamčeno)'}</option>`;
       }).join('');
     }
+
+    function injectRoleAndTitleInline(){
+      const sel = document.getElementById('selTitles');
+      if(!sel) return;
+      const selRow = sel.closest('.row');
+      const profileBox = document.querySelector('.profile-box');
+      if(!profileBox) return;
+    
+      const inline = document.createElement('div');
+      inline.className = 'row align-right compact';
+      inline.innerHTML = `
+        <label>Role &amp; titul</label>
+        <div class="w-compact" style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
+          <span id="badge-primary" class="badge primary">USER</span>
+        </div>`;
+      profileBox.insertAdjacentElement('afterend', inline);
+    
+      // přesun selectu "Titul" do stejného řádku
+      inline.querySelector('.w-compact').appendChild(sel);
+      if (selRow) selRow.remove();
+    
+      // badge podle role z LS
+      const role = (App.auth()?.role || 'user').toLowerCase();
+      document.getElementById('badge-primary').textContent = role === 'admin' ? 'ADMIN' : 'USER';
+    }
     buildTitles(App.unlockedTitles(email));
+    injectRoleAndTitleInline();
 
     const avatarEl  = document.getElementById('acc-avatar');
     const avatarLet = document.getElementById('acc-avatar-letter');
@@ -192,9 +218,9 @@
 
     function dd(origin, s){ return origin.replace(/^https?:\/\/[^/]+/i, 'http://x') + '/u/' + s; }
 
-    function setPublicUrl(origin, s){
-      inpPublic.value = dd(origin, s);          // zobrazená zkrácená verze
-      inpPublic.dataset.full = origin + '/u/' + s; // plná se kopíruje
+    function setPublicUrl(origin, slug){
+      inpPublic.value = origin.replace(/^https?:\/\/[^/]+/i, 'http://x') + '/u/' + slug;   // zkrácený náhled
+      inpPublic.dataset.full = origin + '/u/' + encodeURIComponent(slug);                  // tohle se kopíruje
     }
 
     async function loadMe(){
@@ -322,7 +348,8 @@
       if(avatarFile){
         try{
           const ext = /png$/i.test(avatarFile.type) ? 'png' : 'jpg';
-          const dst = `private/avatars/${encodeURIComponent(email.toLowerCase())}.${ext}`;
+          const safeEmail = email.toLowerCase();                   // '@' GCS zvládá, není potřeba enkódovat
+          const dst = `private/avatars/${safeEmail}.${ext}`;
           avatar_url = await signAndUploadToGCS(avatarFile, dst);
         }catch(e){ App.toast('Nahrání avataru selhalo','error'); return; }
       }
@@ -341,7 +368,16 @@
         // update LS, ať avatar “zůstává”
         try{
           const auth = App.auth() || {};
-          auth.profile = { ...(auth.profile||{}), display_name: payload.display_name || (ME?.display_name), avatar_url: avatar_url || (ME?.avatar_url), titles: payload.titles || (ME?.titles||[]) };
+          const newAvatar = avatar_url || (ME?.avatar_url) || '';
+          const newName   = (display_name || ME?.display_name || email);
+        
+          auth.profile = {
+            ...(auth.profile||{}),
+            display_name: newName,
+            avatar_url: newAvatar,   // nové jméno klíče
+            avatar: newAvatar,       // starší navbar čte tohle
+            titles: (titleVal ? [titleVal] : (ME?.titles||[]))
+          };
           localStorage.setItem('animecloud_auth', JSON.stringify(auth));
         }catch{}
 
@@ -349,8 +385,17 @@
         const newName = payload.display_name || (ME?.display_name) || email;
         document.getElementById('acc-nickname').textContent = newName;
         prevName.textContent = newName;
-        if(avatar_url){ avatarEl.innerHTML = `<img src="${avatar_url}?ts=${Date.now()}" alt="avatar">`; showPrevAvatar(`${avatar_url}?ts=${Date.now()}`, email[0]); }
-
+        
+        // 🔁 Sem vlož tenhle blok a SMAŽ starý:
+        //   if(avatar_url){ avatarEl.innerHTML = `<img src="${avatar_url}?ts=${Date.now()}" ...`; showPrevAvatar(...); }
+        if (avatar_url) {
+          const bust = `${avatar_url}?ts=${Date.now()}`;
+          document.getElementById('acc-avatar').innerHTML = `<img src="${bust}" alt="avatar">`;
+          document.getElementById('prev-avatar').src = bust;
+          document.getElementById('prev-avatar').style.display = 'block';
+          document.getElementById('prev-ava-fb').style.display = 'none';
+        }
+        
         App.toast('✅ Profil uložen','ok');
         avatarFile=null; document.getElementById('inpAvatar').value='';
       }catch(e){
@@ -393,3 +438,4 @@
   </script>
 </body>
 </html>
+
