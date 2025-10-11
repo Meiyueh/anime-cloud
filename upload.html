@@ -221,6 +221,7 @@
       rowSubmit.style.display = (hasVideo && (hasSubs || isAdmin)) ? 'block' : 'none';
     }
 
+    // cílové cesty v bucketu
     function buildDst({ slug, ep, q, name, kind }) {
       const epStr = String(ep).padStart(3,'0');
       if (kind === 'video') {
@@ -231,8 +232,8 @@
       }
       return `uploads/${slug}/${name}`;
     }
-    
-    // ---- Signed URL helpery
+
+    // ---- Signed URL helpery (posíláme { path, contentType })
     async function signUrls({ videoDst, vType, subsDst, sType }) {
       // VIDEO
       const rV = await fetch('/upload/sign', {
@@ -242,7 +243,7 @@
       });
       const jV = await rV.json().catch(()=>null);
       if (!rV.ok || !jV?.ok) throw new Error('sign_failed: ' + (jV?.error || `HTTP ${rV.status}`));
-    
+
       // SUBS (volitelné)
       let jS = null;
       if (subsDst) {
@@ -254,19 +255,10 @@
         jS = await rS.json().catch(()=>null);
         if (!rS.ok || !jS?.ok) throw new Error('sign_failed: ' + (jS?.error || `HTTP ${rS.status}`));
       }
-    
-      // sjednocený výstup
+
       return {
-        video: {
-          put_url: jV.upload_url,
-          public_url: jV.public_url,
-          content_type: vType
-        },
-        subs: jS ? {
-          put_url: jS.upload_url,
-          public_url: jS.public_url,
-          content_type: sType
-        } : null
+        video: { put_url: jV.upload_url, public_url: jV.public_url, content_type: vType },
+        subs:  jS ? { put_url: jS.upload_url, public_url: jS.public_url, content_type: sType } : null
       };
     }
 
@@ -315,9 +307,16 @@
       const currentQ = App.getUploadCountByQuality(chosenAnime.slug, ep, q);
       if (currentQ >= 3) return App.showMsg(msg, `Limit pro ${q} je plný (3/3).`, 'error');
       const nextIndex = currentQ + 1;
+
       const vExt = App.extOrDefault(v.name, 'mp4');
       const videoOut = `${q}_${nextIndex}.${vExt}`;
       const subsOut  = s ? `${q}_${nextIndex}.srt` : null;
+
+      // ✨ typy + cílové cesty pro podpis
+      const vType = v.type || mimeFromExt(v.name) || 'video/mp4';
+      const sType = s ? 'application/x-subrip' : null;
+      const videoDst = buildDst({ slug: chosenAnime.slug, ep, q, name: videoOut, kind: 'video' });
+      const subsDst  = s ? buildDst({ slug: chosenAnime.slug, ep, q, name: subsOut,  kind: 'subs'  }) : null;
 
       overall.classList.remove('hidden');
       barOverall.style.width='0%'; pctOverall.textContent='0%';
@@ -325,10 +324,10 @@
       hideSuccess(); msg.textContent='';
 
       try {
-        // 1) vyžádat Signed URL ze serveru
-        const signed = await signUrls({ slug: chosenAnime.slug, ep, q, videoOut, vFile: v, subsOut, sFile: s });
+        // ✨ vyžádat Signed URL přes { path, contentType }
+        const signed = await signUrls({ videoDst, vType, subsDst, sType });
 
-        // 2) nahrát VIDEO
+        // celkový progres (správný výpočet)
         const totalBytes = (v?.size||0) + (s?.size||0);
         let uploadedBytes = 0;
         const updOverall = (absLoaded) => {
@@ -337,13 +336,14 @@
           pctOverall.textContent = pct + '%';
         };
 
+        // VIDEO upload
         await putWithProgress(signed.video.put_url, v, signed.video.content_type, (loaded, total) => {
           miniPV.style.width = Math.round((loaded/total)*100) + '%';
-          updOverall(loaded + (s ? 0 : 0));
+          updOverall(uploadedBytes + loaded);
         });
         uploadedBytes += v.size; updOverall(uploadedBytes);
 
-        // 3) nahrát SUBS (pokud jsou)
+        // SUBS upload (volitelně)
         if (s && signed.subs) {
           await putWithProgress(signed.subs.put_url, s, signed.subs.content_type, (loaded, total) => {
             miniPS.style.width = Math.round((loaded/total)*100) + '%';
@@ -352,10 +352,9 @@
           uploadedBytes += s.size; updOverall(uploadedBytes);
         }
 
-        // 4) zapsat lokální záznam + UI
+        // záznam o uploadu + refresh počítadel
         App.addUploadRecord({ slug: chosenAnime.slug, episode: ep, quality: q, videoName: videoOut, subsName: s ? subsOut : null, user: a.email, ts: Date.now() });
 
-        // aktualizace počítadel kvality
         for (const opt of selQ.options){
           if (!opt.value) continue;
           const c = App.getUploadCountByQuality(chosenAnime.slug, ep, opt.value);
@@ -393,4 +392,3 @@
   </script>
 </body>
 </html>
-
