@@ -157,7 +157,9 @@
       btnOpen.classList.add('hidden'); panel.style.display='block';
       animeList = await App.fetchAnime('data/anime.json'); // App.fetchAnime použije CLOUD_BASE
       App.populateSelectWithPlaceholder(selAnime, '— vyber anime —');
-      animeList.forEach(a => { const opt=document.createElement('option'); opt.value=a.slug; opt.textContent=a.title; selAnime.appendChild(opt); });
+      animeList.forEach(a => {
+        const opt=document.createElement('option'); opt.value=a.slug; opt.textContent=a.title; selAnime.appendChild(opt);
+      });
       rowEp.style.display='none'; rowQ.style.display='none'; rowFiles.style.display='none'; rowSubmit.style.display='none';
       hideSuccess(); msg.textContent='';
     });
@@ -221,25 +223,23 @@
       rowSubmit.style.display = (hasVideo && (hasSubs || isAdmin)) ? 'block' : 'none';
     }
 
-    // cílové cesty v bucketu
-    function buildDst({ slug, ep, q, name, kind }) {
+    // ---- CÍLOVÁ CESTA V BUCKETU (vše pod anime/<slug>/epNNN/<q>/...)
+    function buildDst({ slug, ep, q, name }) {
       const epStr = String(ep).padStart(3,'0');
-      if (kind === 'video') {
-        return `public/videos/${slug}/ep${epStr}/${q}/${name}`;
-      }
-      if (kind === 'subs') {
-        return `public/subtitles/${slug}/ep${epStr}/${q}/${name}`;
-      }
-      return `uploads/${slug}/${name}`;
+      return `anime/${slug}/ep${epStr}/${q}/${name}`;
     }
 
-    // ---- Signed URL helpery (posíláme { path, contentType })
+    // ---- Podepsání URL pro VIDEO a (volitelně) SUBS
     async function signUrls({ videoDst, vType, subsDst, sType }) {
+      console.debug('[signUrls] videoDst =', videoDst, '| subsDst =', subsDst);
+      if (!videoDst || typeof videoDst !== 'string' || !videoDst.trim()) {
+        throw new Error('internal: empty videoDst');
+      }
       // VIDEO
       const rV = await fetch('/upload/sign', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: videoDst, contentType: vType })
+        body: JSON.stringify({ path: videoDst, contentType: vType || 'application/octet-stream' })
       });
       const jV = await rV.json().catch(()=>null);
       if (!rV.ok || !jV?.ok) throw new Error('sign_failed: ' + (jV?.error || `HTTP ${rV.status}`));
@@ -250,15 +250,15 @@
         const rS = await fetch('/upload/sign', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ path: subsDst, contentType: sType })
+          body: JSON.stringify({ path: subsDst, contentType: sType || 'application/x-subrip' })
         });
         jS = await rS.json().catch(()=>null);
         if (!rS.ok || !jS?.ok) throw new Error('sign_failed: ' + (jS?.error || `HTTP ${rS.status}`));
       }
 
       return {
-        video: { put_url: jV.upload_url, public_url: jV.public_url, content_type: vType },
-        subs:  jS ? { put_url: jS.upload_url, public_url: jS.public_url, content_type: sType } : null
+        video: { put_url: jV.upload_url, public_url: jV.public_url, content_type: vType || 'application/octet-stream' },
+        subs:  jS ? { put_url: jS.upload_url, public_url: jS.public_url, content_type: sType || 'application/x-subrip' } : null
       };
     }
 
@@ -297,36 +297,36 @@
       const a = App.auth(); if (!chosenAnime) return;
       const ep = Number(selEp.value); const q = selQ.value;
       const v = fileVideo.files[0]; const s = fileSubs.files[0]; const isAdmin = (a.role === 'admin');
-    
+
       if (!selAnime.value || !ep || !q || !v) return App.showMsg(msg, 'Vyber anime, díl, kvalitu a video.', 'error');
       if (!isAdmin){
         if (!s) return App.showMsg(msg, 'Titulky (.srt) jsou povinné.', 'error');
         if (!s.name.toLowerCase().endsWith('.srt')) return App.showMsg(msg, 'Titulky musí být .srt.', 'error');
       }
-    
+
       const currentQ = App.getUploadCountByQuality(chosenAnime.slug, ep, q);
       if (currentQ >= 3) return App.showMsg(msg, `Limit pro ${q} je plný (3/3).`, 'error');
       const nextIndex = currentQ + 1;
-    
+
       const vExt = App.extOrDefault(v.name, 'mp4');
       const videoOut = `${q}_${nextIndex}.${vExt}`;
       const subsOut  = s ? `${q}_${nextIndex}.srt` : null;
-    
+
       // typy + cílové cesty pro podpis
       const vType = v.type || mimeFromExt(v.name) || 'video/mp4';
       const sType = s ? 'application/x-subrip' : null;
-      const videoDst = buildDst({ slug: chosenAnime.slug, ep, q, name: videoOut, kind: 'video' });
-      const subsDst  = s ? buildDst({ slug: chosenAnime.slug, ep, q, name: subsOut,  kind: 'subs'  }) : null;
-    
+      const videoDst = buildDst({ slug: chosenAnime.slug, ep, q, name: videoOut });
+      const subsDst  = s ? buildDst({ slug: chosenAnime.slug, ep, q, name: subsOut }) : null;
+
       overall.classList.remove('hidden');
       barOverall.style.width='0%'; pctOverall.textContent='0%';
       miniPV.style.width='0%'; miniPS.style.width='0%';
       hideSuccess(); msg.textContent='';
-    
+
       try {
-        // 1) vyžádej Signed URL přes { path, contentType }
+        // 1) vyžádej Signed URL (pošle se { path, contentType })
         const signed = await signUrls({ videoDst, vType, subsDst, sType });
-    
+
         // 2) celkový progress
         const totalBytes = (v?.size||0) + (s?.size||0);
         let uploadedBytes = 0;
@@ -335,14 +335,14 @@
           barOverall.style.width = pct + '%';
           pctOverall.textContent = pct + '%';
         };
-    
+
         // 3) upload VIDEA
         await putWithProgress(signed.video.put_url, v, signed.video.content_type, (loaded, total) => {
           miniPV.style.width = Math.round((loaded/total)*100) + '%';
           updOverall(uploadedBytes + loaded);
         });
         uploadedBytes += v.size; updOverall(uploadedBytes);
-    
+
         // 4) upload SUBS (je-li)
         if (s && signed.subs) {
           await putWithProgress(signed.subs.put_url, s, signed.subs.content_type, (loaded, total) => {
@@ -351,7 +351,7 @@
           });
           uploadedBytes += s.size; updOverall(uploadedBytes);
         }
-    
+
         // 5) lokální záznam + UI
         App.addUploadRecord({
           slug: chosenAnime.slug,
@@ -362,7 +362,7 @@
           user: App.auth().email,
           ts: Date.now()
         });
-    
+
         for (const opt of selQ.options){
           if (!opt.value) continue;
           const c = App.getUploadCountByQuality(chosenAnime.slug, ep, opt.value);
@@ -370,12 +370,12 @@
           if (c>=3){ opt.disabled=true; opt.textContent = `${base} (FULL)`; }
           else { opt.textContent = `${base} (${c}/3)`; }
         }
-    
+
         rowSubmit.style.display='none';
         fileVideo.value=''; fileSubs.value='';
         videoInfo.textContent='—'; subsInfo.textContent='—';
         showSuccess(`✅ Nahráno: ${chosenAnime.title} · díl ${ep} · ${q} (${videoOut})`);
-    
+
         barOverall.style.width='100%'; pctOverall.textContent='100%';
         setTimeout(()=>overall.classList.add('hidden'), 900);
       } catch (e) {
@@ -401,4 +401,3 @@
   </script>
 </body>
 </html>
-
