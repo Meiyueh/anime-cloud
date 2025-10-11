@@ -12,10 +12,14 @@
     .profile-avatar img{width:100%;height:100%;object-fit:cover}
     .badges{display:flex;gap:8px;flex-wrap:wrap;margin-top:4px}
     .muted{color:var(--muted)}
-    .toolbar{display:flex;gap:.6rem;justify-content:flex-end;align-items:center;flex-wrap:wrap;margin-top:.6rem}
-    .btn{ padding:.48rem .8rem; border-radius:8px; width:auto !important; }
     .msg{margin-top:12px}
     .hidden{display:none !important}
+    .section-title{margin-top:1rem;font-size:1.1rem;font-weight:600;border-bottom:1px solid var(--border);padding-bottom:.3rem;margin-bottom:.8rem}
+    .section-anime{margin-top:.6rem;font-weight:600}
+    /* jednoduchá mřížka pro karty (spolehne se hlavně na tvoje .card .anime-card styly) */
+    .cards-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+    @media (max-width:900px){ .cards-grid{grid-template-columns:repeat(2,minmax(0,1fr));} }
+    @media (max-width:560px){ .cards-grid{grid-template-columns:1fr;} }
   </style>
 </head>
 <body>
@@ -35,12 +39,15 @@
   <main class="container">
     <div class="card">
       <div class="cover">
-        <div class="profile-avatar"><img id="pfp" alt="avatar" /><span id="pfp-fb" class="hidden">👤</span></div>
+        <div class="profile-avatar">
+          <img id="pfp" alt="avatar" class="hidden" />
+          <span id="pfp-fb">👤</span>
+        </div>
         <div>
           <h2 id="name">—</h2>
           <div class="badges">
-            <span id="badge-title" class="badge hidden"></span>
-            <span id="badge-vis" class="badge"></span>
+            <span id="badge-primary" class="badge primary hidden"></span>
+            <span id="badge-secondary" class="badge hidden"></span>
           </div>
           <div class="muted">
             <span id="slug">@—</span> • <span id="joined">Členem od —</span>
@@ -48,13 +55,19 @@
         </div>
       </div>
 
-      <div class="toolbar">
-        <button id="btnCopy" class="btn btn-outline">Zkopírovat odkaz</button>
-      </div>
-
       <p id="privNote" class="msg hidden">🔒 Tento profil je soukromý. Vlastník zatím nesdílí své informace veřejně.</p>
       <p id="linkNote" class="msg hidden">🔗 Tento profil je přístupný jen přes odkaz.</p>
       <p id="notFound" class="msg hidden">❌ Uživatel nenalezen.</p>
+
+      <div class="section-title">Viditelnost profilu</div>
+      <!-- pod tímto nadpisem budou badge a seznam top 3 anime -->
+      <div id="visBadges" class="badges" style="margin-bottom:.5rem">
+        <!-- badge-primary (viditelnost) a badge-secondary (titul) už jsou nahoře a jen se zviditelní -->
+      </div>
+
+      <div class="section-anime">Uploadované Anime</div>
+      <div id="top-anime" class="cards-grid"></div>
+      <p id="noUploads" class="muted hidden" style="margin-top:.25rem">Žádné nahrávky zatím nejsou.</p>
     </div>
   </main>
 
@@ -64,84 +77,225 @@
   <script>
     App.initNavbar();
 
-    // --- utils ---
+    // --- helpers ---
+    const el = id => document.getElementById(id);
+    const show = (id, on=true)=>{ const x=el(id); if(!x) return; x.classList[on?'remove':'add']('hidden'); };
     const ddmmyyyy = iso=>{
       if(!iso) return '—';
       const d = new Date(iso);
       return String(d.getDate()).padStart(2,'0')+'.'+String(d.getMonth()+1).padStart(2,'0')+'.'+d.getFullYear();
     };
-    const el = id=>document.getElementById(id);
-    const show = (id, on=true)=>{ const x=el(id); if(!x) return; x.classList[on?'remove':'add']('hidden'); };
 
-    // --- resolve slug z /u/<slug> ---
+    // slug z /u/<slug>
     const rawPath = (location.pathname || '');
-    const slug = decodeURIComponent((rawPath.split('/u/')[1] || '').split(/[?#]/)[0] || '').trim();
+    const userSlug = decodeURIComponent((rawPath.split('/u/')[1] || '').split(/[?#]/)[0] || '').trim();
+
+    // odhad emailu z avatar_url (private/avatars/<email>.<ext>)
+    function guessEmailFromAvatar(url){
+      try{
+        if(!url) return null;
+        const path = new URL(url, location.origin).pathname; // i pro absolutní GCS url
+        const m = path.match(/\/private\/avatars\/([^\/.]+)\.[a-z0-9]+$/i);
+        if(!m) return null;
+        return decodeURIComponent(m[1]).replace('%40','@');
+      }catch{ return null; }
+    }
+
+    // heuristika pro vytěžení mapy uživatel→slugy z /uploads/counts
+    function extractUserMapFromCounts(counts){
+      // pokus 1: counts.by_user[email][slug] = X
+      if(counts && counts.by_user && typeof counts.by_user === 'object'){
+        return counts.by_user;
+      }
+      // pokus 2: counts.users[email][slug] = X
+      if(counts && counts.users && typeof counts.users === 'object'){
+        return counts.users;
+      }
+      // pokus 3: counts[slug].users[email] = X
+      const map = {};
+      if(counts && typeof counts === 'object'){
+        for(const [slug, obj] of Object.entries(counts)){
+          if(obj && obj.users && typeof obj.users === 'object'){
+            for(const [email, n] of Object.entries(obj.users)){
+              if(!map[email]) map[email] = {};
+              map[email][slug] = n;
+            }
+          }
+        }
+        if(Object.keys(map).length) return map;
+      }
+      return {};
+    }
+
+    // získání total počtů pro Y
+    function extractTotalsFromCounts(counts){
+      // pokus 1: counts.total[slug] = Y
+      if(counts && counts.total && typeof counts.total === 'object'){
+        return counts.total;
+      }
+      // pokus 2: counts[slug].total = Y
+      const t = {};
+      if(counts && typeof counts === 'object'){
+        for(const [slug, obj] of Object.entries(counts)){
+          if(obj && typeof obj.total === 'number'){ t[slug] = obj.total; }
+          else if(typeof obj === 'number'){ t[slug] = obj; }
+        }
+      }
+      return t;
+    }
+
+    // načti anime metadata
+    async function loadAnimeMeta(){
+      try{
+        const r = await fetch('/data/anime.json');
+        const j = await r.json();
+        const meta = {};
+        if(Array.isArray(j)){
+          j.forEach(a=>{
+            const slug = a.slug || a.id || a.code;
+            if(!slug) return;
+            meta[slug] = {
+              title: a.title || a.name || slug,
+              cover: a.cover_url || a.cover || null
+            };
+          });
+        }else if(j && j.anime && Array.isArray(j.anime)){
+          j.anime.forEach(a=>{
+            const slug = a.slug || a.id || a.code;
+            if(!slug) return;
+            meta[slug] = {
+              title: a.title || a.name || slug,
+              cover: a.cover_url || a.cover || null
+            };
+          });
+        }
+        return meta;
+      }catch{ return {}; }
+    }
+
+    function coverUrlFor(slug, metaCover){
+      if(metaCover) return metaCover;
+      // fallback na standardní umístění v bucketu (jpg), onerror spadne na logo
+      return `https://storage.googleapis.com/anime-cloud/covers/${encodeURIComponent(slug)}.jpg`;
+    }
+
+    function buildAnimeCard(slug, title, x, y, cover){
+      const a = document.createElement('a');
+      a.href = '#';
+      a.className = 'card anime-card';
+      a.dataset.slug = slug;
+      a.innerHTML = `
+        <img class="cover-tall" loading="lazy"
+             src="${cover}"
+             alt="${title.replace(/"/g,'&quot;')}"
+             onerror="this.src='assets/logo.svg'">
+        <div class="anime-title">${title}</div>
+        <div class="xxxxx">Počet nahraných videí uživatelem ${x}/${(y ?? '?')}</div>
+      `;
+      return a;
+    }
+
+    async function loadTop3Uploads(viewerProfile){
+      // respektuj soukromí
+      const vis = (viewerProfile.visibility || 'private').toLowerCase();
+      const isPrivate = vis === 'private';
+      if(isPrivate){
+        show('privNote', true);
+        show('noUploads', true);
+        return;
+      }else if(vis === 'link'){
+        show('linkNote', true);
+      }
+
+      // odhad emailu (kvůli filtrování v counts)
+      const email = guessEmailFromAvatar(viewerProfile.avatar_url) || null;
+
+      // načtení počtů a metadat
+      let counts = {};
+      try{
+        const rc = await fetch('/uploads/counts');
+        counts = await rc.json();
+      }catch{}
+
+      const byUser = extractUserMapFromCounts(counts);
+      const totals = extractTotalsFromCounts(counts);
+
+      const perAnime = (email && byUser[email]) ? byUser[email] : null;
+      if(!perAnime || !Object.keys(perAnime).length){
+        show('noUploads', true);
+        return;
+      }
+
+      // seřadit podle X (desc) a stáhnout meta
+      const meta = await loadAnimeMeta();
+      const top3 = Object.entries(perAnime)
+        .map(([slug, x])=>({ slug, x: Number(x)||0, y: (typeof totals[slug]==='number'? totals[slug] : null) }))
+        .filter(e=>e.x>0)
+        .sort((a,b)=> b.x - a.x)
+        .slice(0,3);
+
+      if(!top3.length){
+        show('noUploads', true);
+        return;
+      }
+
+      const wrap = el('top-anime');
+      wrap.innerHTML = '';
+      top3.forEach(entry=>{
+        const title = (meta[entry.slug]?.title) || entry.slug;
+        const cover = coverUrlFor(entry.slug, meta[entry.slug]?.cover || null);
+        wrap.appendChild(buildAnimeCard(entry.slug, title, entry.x, entry.y, cover));
+      });
+    }
 
     async function loadProfile(){
-      if(!slug){ show('notFound', true); return; }
+      if(!userSlug){ show('notFound', true); return; }
       try{
-        const r = await fetch('/api/profile/'+encodeURIComponent(slug));
+        const r = await fetch('/api/profile/'+encodeURIComponent(userSlug));
         const j = await r.json().catch(()=> ({}));
         if(!r.ok || !j?.ok || !j?.profile){ throw new Error('user not found'); }
 
         const p = j.profile;
+
         // Jméno / slug
         el('name').textContent = p.display_name || p.slug || 'Uživatel';
-        el('slug').textContent = '@' + (p.slug || slug);
+        el('slug').textContent = '@' + (p.slug || userSlug);
+        el('joined').textContent = 'Členem od ' + ddmmyyyy(p.joined_at);
 
-        // Avatar + fallback
+        // Avatar + fallback písmeno
         const img = el('pfp'), fb = el('pfp-fb');
-        img.onload = ()=>{ show('pfp', true); show('pfp-fb', false); };
-        img.onerror= ()=>{ show('pfp', false); show('pfp-fb', true); fb.textContent = (String(p.display_name||p.slug||'?')[0]||'?').toUpperCase(); };
         if(p.avatar_url){
           img.src = p.avatar_url + '?ts=' + Date.now();
-          show('pfp', true);
-          show('pfp-fb', false);
+          img.onload = ()=>{ show('pfp', true); show('pfp-fb', false); };
+          img.onerror= ()=>{ show('pfp', false); fb.textContent = (String(p.display_name||p.slug||'?')[0]||'?').toUpperCase(); show('pfp-fb', true); };
         }else{
           show('pfp', false);
           fb.textContent = (String(p.display_name||p.slug||'?')[0]||'?').toUpperCase();
           show('pfp-fb', true);
         }
 
-        // Členství
-        el('joined').textContent = 'Členem od ' + ddmmyyyy(p.joined_at);
+        // Badge-primary = viditelnost
+        const visTxt = (p.visibility||'private').toLowerCase()==='public' ? 'Veřejný'
+                      : (p.visibility||'').toLowerCase()==='link' ? 'Jen přes odkaz'
+                      : 'Soukromý';
+        el('badge-primary').textContent = visTxt;
+        show('badge-primary', true);
 
-        // Titul(y)
+        // Badge-secondary = první titul (pokud je)
         const t = Array.isArray(p.titles) ? (p.titles[0]||'') : '';
-        if(t){
-          const b = el('badge-title');
-          b.textContent = t;
-          show('badge-title', true);
-        }else{
-          show('badge-title', false);
-        }
+        if(t){ el('badge-secondary').textContent = t; show('badge-secondary', true); }
+        else { show('badge-secondary', false); }
 
-        // Viditelnost – badge + poznámka
-        const vis = (p.visibility || 'private').toLowerCase();
-        const bvis = el('badge-vis');
-        bvis.textContent = vis === 'public' ? 'Veřejný' : (vis === 'link' ? 'Jen přes odkaz' : 'Soukromý');
-        if(vis === 'private'){
-          show('privNote', true);
-        }else if(vis === 'link'){
-          show('linkNote', true);
-        }
+        // zviditelni řádek badge i pod „Viditelnost profilu“
+        show('visBadges', true);
+
+        // Top 3 uploads
+        await loadTop3Uploads(p);
 
       }catch(e){
         show('notFound', true);
       }
     }
-
-    // kopírování veřejné URL
-    el('btnCopy').addEventListener('click', async ()=>{
-      const url = location.origin + '/u/' + encodeURIComponent(slug||'');
-      try{ await navigator.clipboard.writeText(url); App.toast('Odkaz zkopírován','ok'); }
-      catch{
-        const tmp=document.createElement('input');
-        tmp.value=url; tmp.style.position='fixed'; tmp.style.opacity=0;
-        document.body.appendChild(tmp); tmp.select(); document.execCommand('copy'); tmp.remove();
-        App.toast('Odkaz zkopírován','ok');
-      }
-    });
 
     loadProfile();
   </script>
