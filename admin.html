@@ -247,7 +247,7 @@
       function wireDeleteButtons(){
         const makeKey = (slug, ep, q, name) => {
           const epStr = String(ep).padStart(3,'0');
-          // vše ukládáme pod anime/<slug>/epNNN/<q>/<soubor>
+          // přesný prefix v GCS (podle tvého uploadu): anime/<slug>/epNNN/<q>/<soubor>
           return `anime/${slug}/ep${epStr}/${q}/${name}`;
         };
       
@@ -261,19 +261,21 @@
       
             if (!confirm(`Smazat ${name}${srt ? ' + ' + srt : ''}?`)) return;
       
-            // 1) smaž v GCS (video + případně .srt)
             try{
+              // VIDEO
               const videoKey = makeKey(slug, ep, q, name);
               const calls = [
-                fetch(App.api('/delete'), {
+                fetch('/delete', {
                   method:'POST',
                   headers:{'Content-Type':'application/json'},
                   body: JSON.stringify({ path: videoKey })
                 })
               ];
+      
+              // SUBS (pokud existují)
               if (srt) {
                 const subsKey = makeKey(slug, ep, q, srt);
-                calls.push(fetch(App.api('/delete'), {
+                calls.push(fetch('/delete', {
                   method:'POST',
                   headers:{'Content-Type':'application/json'},
                   body: JSON.stringify({ path: subsKey })
@@ -281,17 +283,19 @@
               }
       
               const results = await Promise.all(calls);
-              const bad = results.find(r => !r.ok);
-              if (bad) {
-                const payload = await bad.json().catch(()=>null);
-                throw new Error(payload?.error || `HTTP ${bad.status}`);
+              // vyhoď případnou chybu, ať ji vidíme
+              for (const r of results){
+                if (!r.ok){
+                  const p = await r.json().catch(()=>null);
+                  throw new Error(p?.error || `HTTP ${r.status}`);
+                }
               }
             }catch(e){
               App.toast('Mazání na GCS selhalo: ' + (e.message || e), 'error');
               return;
             }
       
-            // 2) smaž lokální záznam a obnov UI
+            // Lokální záznam pryč + refresh UI
             const ls = App.getUploads();
             const idx = ls.findIndex(u=>u.slug===slug && u.episode===ep && u.quality===q && u.videoName===name);
             if (idx>=0){ ls.splice(idx,1); App.setUploads(ls); }
@@ -462,4 +466,5 @@
   </script>
 </body>
 </html>
+
 
