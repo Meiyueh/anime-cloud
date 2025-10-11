@@ -1,6 +1,6 @@
 # ac/uploads.py
 import os, io, json, mimetypes, sys, datetime, traceback
-from urllib.parse import quote, parse_qs
+from urllib.parse import quote, parse_qs, urlparse, unquote
 from google.cloud import storage
 from . import settings
 
@@ -140,21 +140,70 @@ def handle_upload(handler):
         traceback.print_exc()
         return _json(handler, 400, {"ok":False,"error":str(e)})
 
+def _normalize_gcs_path(path_or_url: str, bucket_name: str) -> str:
+    """
+    Vezme buď 'anime/...' nebo úplné GCS URL a vrátí čistý object key bez počátečního '/'.
+    Povolíme jen mazání pod prefixem 'anime/' jako bezpečnostní pojistku.
+    """
+    if not path_or_url:
+        return ""
+
+    s = path_or_url.strip()
+
+    # Pokud je to URL, zkus z ní vyndat cestu
+    if s.startswith("http://") or s.startswith("https://"):
+        u = urlparse(s)
+        # běžné public URL: https://storage.googleapis.com/<bucket>/<object>
+        # případně mediaLink/selfLink (mají taky /<bucket>/<object> v path)
+        parts = [p for p in u.path.split("/") if p]  # rozsekej a odfiltruj prázdné
+        if not parts:
+            return ""
+        # najdi segment bucketu a vezmi zbytek jako object key
+        key = ""
+        for i, seg in enumerate(parts):
+            if seg == bucket_name:
+                key = "/".join(parts[i+1:])
+                break
+        if not key:
+            # fallback: pokud path nezačíná bucketem (např. reverzní proxy), zkus bez 1. segmentu
+            key = "/".join(parts[1:]) if len(parts) > 1 else parts[0]
+        s = key
+
+    s = unquote(s).lstrip("/")
+
+    # bezpečnost: nechceme omylem mazat něco mimo náš „prostor“
+    if not s.startswith("anime/"):
+        # chceš-li povolit i jiné prefixy, přidej je sem:
+        # if s.startswith(("anime/", "public/videos/", "public/subtitles/")): ...
+        return ""
+
+    return s
+
 def handle_delete_file(handler):
     try:
-        body = _read_request_body(handler) or {}
-        path = (body.get("path") or "").lstrip("/")
+        body = handler._read_body() or {}
+        raw = body.get("path") or body.get("url") or body.get("public_url") or body.get("src") or ""
+        path = _normalize_gcs_path(raw, BUCKET_NAME)
+
         if not path:
-            return _json(handler, 400, {"ok":False,"error":"missing path"})
+            return _json(handler, 400, {"ok": False, "error": "missing or invalid path"})
+
         bucket = _get_bucket()
         if bucket:
-            blob = bucket.blob(path)
-            blob.delete(if_generation_match=None)
-            return _json(handler, 200, {"ok": True})
-        # local fallback
+            try:
+                blob = bucket.blob(path)
+                blob.delete(if_generation_match=None)  # idempotentní
+                return _json(handler, 200, {"ok": True, "deleted": path, "scope": "gcs"})
+            except Exception as e:
+                # Pokud nemáš storage.objects.delete právo, vrátí 403 — řekneme to nahlas
+                return _json(handler, 400, {"ok": False, "error": f"gcs_delete_failed: {e}", "path": path})
+
+        # --- Lokální fallback (dev režim)
         root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
         dst = os.path.abspath(os.path.join(root, path))
-        if os.path.exists(dst): os.remove(dst)
-        return _json(handler, 200, {"ok": True})
+        if os.path.exists(dst):
+            os.remove(dst)
+        return _json(handler, 200, {"ok": True, "deleted": path, "scope": "local"})
     except Exception as e:
-        return _json(handler, 400, {"ok":False,"error":str(e)})
+        traceback.print_exc()
+        return _json(handler, 400, {"ok": False, "error": str(e)})
