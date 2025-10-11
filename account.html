@@ -35,6 +35,9 @@
     .modal .row{display:grid;grid-template-columns:1fr;gap:.5rem}
     .modal .actions{display:flex;gap:.5rem;justify-content:flex-end;margin-top:.8rem}
     .ava-fallback{display:flex;align-items:center;justify-content:center;width:100%;height:100%;font-weight:700}
+
+    /* badges pod jménem */
+    .badges{display:flex;gap:8px;flex-wrap:wrap;margin-top:4px}
   </style>
 </head>
 <body>
@@ -60,7 +63,13 @@
           <div id="avatarFrame" class="frame">
             <div class="profile-avatar" id="acc-avatar" title="Klikni pro změnu avataru"><span id="acc-avatar-letter">👤</span></div>
           </div>
-          <div><h2 id="acc-nickname">Uživatel</h2></div>
+          <div>
+            <h2 id="acc-nickname">Uživatel</h2>
+            <div class="badges">
+              <span id="badge-primary" class="badge primary">USER</span>
+              <span id="badge-secondary" class="badge">Žádný titul</span>
+            </div>
+          </div>
         </div>
 
         <input type="file" id="inpAvatar" accept="image/png,image/jpeg" style="display:none"/>
@@ -91,7 +100,7 @@
         </div>
 
         <div class="row align-right compact">
-          <label for="selTitles">Titul</label>
+          <label for="selTitles">Tituly</label>
           <select id="selTitles" class="w-compact"></select>
         </div>
 
@@ -169,33 +178,7 @@
         return `<option value="${t}" ${ok?'':'disabled'}>${t}${ok?'':' (zamčeno)'}</option>`;
       }).join('');
     }
-
-    function injectRoleAndTitleInline(){
-      const sel = document.getElementById('selTitles');
-      if(!sel) return;
-      const selRow = sel.closest('.row');
-      const profileBox = document.querySelector('.profile-box');
-      if(!profileBox) return;
-    
-      const inline = document.createElement('div');
-      inline.className = 'row align-right compact';
-      inline.innerHTML = `
-        <label>Role &amp; titul</label>
-        <div class="w-compact" style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
-          <span id="badge-primary" class="badge primary">USER</span>
-        </div>`;
-      profileBox.insertAdjacentElement('afterend', inline);
-    
-      // přesun selectu "Titul" do stejného řádku
-      inline.querySelector('.w-compact').appendChild(sel);
-      if (selRow) selRow.remove();
-    
-      // badge podle role z LS
-      const role = (App.auth()?.role || 'user').toLowerCase();
-      document.getElementById('badge-primary').textContent = role === 'admin' ? 'ADMIN' : 'USER';
-    }
     buildTitles(App.unlockedTitles(email));
-    injectRoleAndTitleInline();
 
     const avatarEl  = document.getElementById('acc-avatar');
     const avatarLet = document.getElementById('acc-avatar-letter');
@@ -215,8 +198,6 @@
         prevImg.style.display='none'; prevFB.style.display='flex'; prevFB.textContent = (letter||'?').toUpperCase();
       }
     }
-
-    function dd(origin, s){ return origin.replace(/^https?:\/\/[^/]+/i, 'http://x') + '/u/' + s; }
 
     function setPublicUrl(origin, slug){
       inpPublic.value = origin.replace(/^https?:\/\/[^/]+/i, 'http://x') + '/u/' + slug;   // zkrácený náhled
@@ -243,18 +224,24 @@
         document.getElementById('meta-created').textContent = joined ? ddmmyyyy(joined) : '—';
         prevJoined.textContent = 'Členem od ' + (joined ? ddmmyyyy(joined) : '—');
 
-        setPublicUrl(location.origin, encodeURIComponent(slug));
+        setPublicUrl(location.origin, slug);
 
         const tInit = Array.isArray(ME.titles) ? (ME.titles[0]||'') : '';
         if(tInit) document.getElementById('selTitles').value = tInit;
         prevName.textContent = ME.display_name || slug;
         prevSlug.textContent = '@' + slug;
+
+        // badgy
+        const role = (App.auth()?.role || 'user').toLowerCase();
+        document.getElementById('badge-primary').textContent = (role === 'admin') ? 'ADMIN' : 'USER';
+        document.getElementById('badge-secondary').textContent = tInit || 'Žádný titul';
       }catch{
         // nouzové hodnoty z LS
         const prof = a.profile || {};
-        document.getElementById('inpNickname').value = prof.nickname || '';
-        document.getElementById('acc-nickname').textContent = prof.nickname || email;
-        const ava = prof.avatar || '';
+        document.getElementById('inpNickname').value = prof.nickname || prof.display_name || '';
+        document.getElementById('acc-nickname').textContent = prof.nickname || prof.display_name || email;
+
+        const ava = prof.avatar_url || prof.avatar || '';
         if(ava){ avatarEl.innerHTML = `<img src="${ava}" alt="avatar">`; showPrevAvatar(ava, email[0]); }
         else { avatarLet.textContent = (email||'?')[0].toUpperCase(); showPrevAvatar('', email[0]); }
 
@@ -262,9 +249,15 @@
         document.getElementById('meta-created').textContent = created ? ddmmyyyy(created) : '—';
         prevJoined.textContent = 'Členem od ' + (created ? ddmmyyyy(created) : '—');
 
-        setPublicUrl(location.origin, encodeURIComponent(slug));
-        prevName.textContent = prof.nickname || slug;
+        setPublicUrl(location.origin, slug);
+        prevName.textContent = prof.nickname || prof.display_name || slug;
         prevSlug.textContent = '@' + slug;
+
+        const fbTitle = (prof.titles && prof.titles[0]) || prof.secondaryTitle || '';
+        if (fbTitle) document.getElementById('selTitles').value = fbTitle;
+        document.getElementById('badge-secondary').textContent = fbTitle || 'Žádný titul';
+        const fbRole = (a.role || 'user').toLowerCase();
+        document.getElementById('badge-primary').textContent = (fbRole === 'admin') ? 'ADMIN' : 'USER';
       }
     }
     loadMe();
@@ -292,6 +285,11 @@
       const r=new FileReader();
       r.onload=()=>{ const u=r.result; avatarEl.innerHTML=`<img src="${u}" alt="avatar">`; showPrevAvatar(u, email[0]); };
       r.readAsDataURL(f);
+    });
+
+    // živá změna titulů → badge
+    document.getElementById('selTitles').addEventListener('change', (e)=>{
+      document.getElementById('badge-secondary').textContent = e.target.value || 'Žádný titul';
     });
 
     document.getElementById('inpNickname').addEventListener('input', ()=>{
@@ -348,7 +346,7 @@
       if(avatarFile){
         try{
           const ext = /png$/i.test(avatarFile.type) ? 'png' : 'jpg';
-          const safeEmail = email.toLowerCase();                   // '@' GCS zvládá, není potřeba enkódovat
+          const safeEmail = email.toLowerCase();                   // '@' GCS zvládá, netřeba encode
           const dst = `private/avatars/${safeEmail}.${ext}`;
           avatar_url = await signAndUploadToGCS(avatarFile, dst);
         }catch(e){ App.toast('Nahrání avataru selhalo','error'); return; }
@@ -365,12 +363,14 @@
         const j = await r.json().catch(()=> ({}));
         if(!r.ok || !j?.ok) throw new Error(j?.error||'Uložení profilu selhalo');
 
-        // update LS, ať avatar “zůstává”
+        // držet aktuální ME
+        ME = j.me || ME;
+
+        // update LS, ať avatar a tituly zůstávají
         try{
           const auth = App.auth() || {};
           const newAvatar = avatar_url || (ME?.avatar_url) || '';
           const newName   = (display_name || ME?.display_name || email);
-        
           auth.profile = {
             ...(auth.profile||{}),
             display_name: newName,
@@ -385,9 +385,7 @@
         const newName = payload.display_name || (ME?.display_name) || email;
         document.getElementById('acc-nickname').textContent = newName;
         prevName.textContent = newName;
-        
-        // 🔁 Sem vlož tenhle blok a SMAŽ starý:
-        //   if(avatar_url){ avatarEl.innerHTML = `<img src="${avatar_url}?ts=${Date.now()}" ...`; showPrevAvatar(...); }
+
         if (avatar_url) {
           const bust = `${avatar_url}?ts=${Date.now()}`;
           document.getElementById('acc-avatar').innerHTML = `<img src="${bust}" alt="avatar">`;
@@ -395,7 +393,10 @@
           document.getElementById('prev-avatar').style.display = 'block';
           document.getElementById('prev-ava-fb').style.display = 'none';
         }
-        
+
+        // badge pro titul
+        document.getElementById('badge-secondary').textContent = titleVal || 'Žádný titul';
+
         App.toast('✅ Profil uložen','ok');
         avatarFile=null; document.getElementById('inpAvatar').value='';
       }catch(e){
@@ -438,4 +439,3 @@
   </script>
 </body>
 </html>
-
