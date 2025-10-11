@@ -6,6 +6,7 @@ from urllib.parse import urlparse, parse_qs
 # Importy modulů (načtou i .env přes settings)
 from ac import settings
 from ac import auth, uploads, anime, feedback
+from ac import me
 import ac.me as me
 import ac.profile as profile
 
@@ -55,6 +56,8 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             p = urlparse(self.path)
 
+            if me.route_get(self, p.path): return
+
             # API – původní
             if p.path == "/auth/verify":         return auth.handle_verify(self, p)
             if p.path == "/data/anime.json":     return anime.handle_anime_json(self)
@@ -78,10 +81,13 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             p = urlparse(self.path)
 
+            if me.route_post(self, p.path): return
+
             # Auth / uploads / admin / feedback
             if p.path == "/auth/register":       return auth.handle_register(self)
             if p.path == "/auth/login":          return auth.handle_login(self)
             if p.path == "/auth/resend":         return auth.handle_resend(self)
+            if p.path == "/auth/change_password":return auth.handle_change_password(self)
 
             # DOPLNĚNO: starý endpoint používá frontend jako fallback
             if p.path == "/auth/update_profile":
@@ -126,3 +132,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
