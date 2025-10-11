@@ -11,28 +11,15 @@
     .progress .bar{height:100%;width:0%;background:linear-gradient(90deg,#7c5cff,#35c759,#7c5cff);background-size:200% 100%;animation:slide 2s linear infinite;transition:width .12s ease-out}
     .progress-percent{margin-top:6px;font-size:.9rem;color:var(--muted);text-align:right}
     @keyframes slide{0%{background-position:0% 0}100%{background-position:200% 0}}
-
     .row-files { display:grid; grid-template-columns: 1fr 1fr; gap: 16px; }
     @media (max-width: 700px) { .row-files { grid-template-columns: 1fr; } }
     .field { display:flex; flex-direction:column; gap:6px; }
     .file-info{font-size:.9rem;color:var(--muted)}
-    #rowAnime, #rowEp, #rowQ {
-      display: flex;
-      flex-direction: column;
-      align-items: flex-start;
-      gap: 6px;
-    }
+    #rowAnime, #rowEp, #rowQ { display:flex; flex-direction:column; align-items:flex-start; gap:6px; }
     #panel .row.compact.align-left{ gap: 6px; }
     #panel .row.compact.align-left > div{ margin-top: 0 !important; }
-
-    /* Stejná šířka všech selectů */
     #panel select { width: 320px !important; text-align-last: left; }
-
-    @media (max-width:560px){
-      #panel select{ width:100% !important; max-width:none; }
-    }
-
-    /* mini progress pro jednotlivé soubory */
+    @media (max-width:560px){ #panel select{ width:100% !important; max-width:none; } }
     .file-mini-progress{height:6px;background:#0f0f1d;border:1px solid var(--border);border-radius:999px;overflow:hidden}
     .file-mini-progress>div{height:100%;width:0%;background:linear-gradient(90deg,#7c5cff,#35c759,#7c5cff);background-size:200% 100%;animation:slide 2s linear infinite;transition:width .12s}
   </style>
@@ -60,28 +47,19 @@
       </div>
 
       <div id="panel" class="card" style="margin-top:12px;display:none;">
-        <!-- Vyber anime -->
         <div class="row compact align-left" id="rowAnime">
           <label for="selAnime">Vyber anime</label>
-          <div>
-            <select id="selAnime" class="w-compact"></select>
-          </div>
+          <div><select id="selAnime" class="w-compact"></select></div>
         </div>
 
-        <!-- Vyber díl -->
         <div class="row compact align-left" id="rowEp" style="display:none">
           <label for="selEp">Vyber díl</label>
-          <div>
-            <select id="selEp" class="w-compact"></select>
-          </div>
+          <div><select id="selEp" class="w-compact"></select></div>
         </div>
 
-        <!-- Vyber kvalitu -->
         <div class="row compact align-left" id="rowQ" style="display:none">
           <label for="selQ">Vyber kvalitu</label>
-          <div>
-            <select id="selQ" class="w-compact"></select>
-          </div>
+          <div><select id="selQ" class="w-compact"></select></div>
         </div>
 
         <div class="row row-files" id="rowFiles" style="display:none">
@@ -110,7 +88,6 @@
         <p id="msg" class="msg"></p>
       </div>
 
-      <!-- Celkový progress -->
       <div id="overallProgress" class="progress-wrap hidden">
         <div class="progress"><div class="bar" id="barOverall"></div></div>
         <div class="progress-percent" id="pctOverall">0%</div>
@@ -122,13 +99,11 @@
 
   <script src="scripts/app.js"></script>
   <script>
-    // GCS veřejná základna pro čtení (katalog, obrázky)
     window.CLOUD_BASE = "https://storage.googleapis.com/anime-cloud";
 
     App.initNavbar();
     App.guardAuthOnPage('login.html');
 
-    // ---- DOM refs
     const btnOpen = document.getElementById('btnOpen');
     const panel = document.getElementById('panel');
     const selAnime = document.getElementById('selAnime');
@@ -144,22 +119,14 @@
 
     let animeList = []; let chosenAnime = null;
 
-    function showSuccess(text){
-      successBox.textContent = text;
-      successBox.classList.remove('hidden');
-      App.toast(text,'ok');
-      setTimeout(()=>successBox.classList.add('hidden'), 4500);
-    }
+    function showSuccess(text){ successBox.textContent = text; successBox.classList.remove('hidden'); App.toast(text,'ok'); setTimeout(()=>successBox.classList.add('hidden'), 4500); }
     function hideSuccess(){ successBox.classList.add('hidden'); successBox.textContent=''; }
 
-    // otevři panel + načti katalog z GCS
     btnOpen.addEventListener('click', async ()=> {
       btnOpen.classList.add('hidden'); panel.style.display='block';
-      animeList = await App.fetchAnime('data/anime.json'); // App.fetchAnime použije CLOUD_BASE
+      animeList = await App.fetchAnime('data/anime.json');
       App.populateSelectWithPlaceholder(selAnime, '— vyber anime —');
-      animeList.forEach(a => {
-        const opt=document.createElement('option'); opt.value=a.slug; opt.textContent=a.title; selAnime.appendChild(opt);
-      });
+      animeList.forEach(a => { const opt=document.createElement('option'); opt.value=a.slug; opt.textContent=a.title; selAnime.appendChild(opt); });
       rowEp.style.display='none'; rowQ.style.display='none'; rowFiles.style.display='none'; rowSubmit.style.display='none';
       hideSuccess(); msg.textContent='';
     });
@@ -190,17 +157,13 @@
 
     selQ.addEventListener('change', () => { rowFiles.style.display='grid'; maybeEnableSubmit(); hideSuccess(); msg.textContent=''; });
 
-    // Drag&Drop helpers
     function wireDropzone(zone, input, info, mini) {
       zone.addEventListener('click', ()=> input.click());
       zone.addEventListener('dragover', e=>{ e.preventDefault(); zone.classList.add('dragover'); });
       zone.addEventListener('dragleave', ()=> zone.classList.remove('dragover'));
       zone.addEventListener('drop', e=>{
         e.preventDefault(); zone.classList.remove('dragover');
-        if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-          input.files = e.dataTransfer.files;
-          input.dispatchEvent(new Event('change'));
-        }
+        if (e.dataTransfer.files && e.dataTransfer.files[0]) { input.files = e.dataTransfer.files; input.dispatchEvent(new Event('change')); }
       });
       input.addEventListener('change', ()=>{
         const f = input.files[0];
@@ -213,7 +176,6 @@
     wireDropzone(dropVideo, fileVideo, videoInfo, miniPV);
     wireDropzone(dropSubs, fileSubs, subsInfo, miniPS);
 
-    // Validace + zobrazit submit
     function maybeEnableSubmit(){
       const isAdmin = App.auth().role === 'admin';
       const v = fileVideo.files[0]; const s = fileSubs.files[0];
@@ -223,39 +185,31 @@
       rowSubmit.style.display = (hasVideo && (hasSubs || isAdmin)) ? 'block' : 'none';
     }
 
-    // ---- CÍLOVÁ CESTA V BUCKETU (vše pod anime/<slug>/epNNN/<q>/...)
+    // cílová cesta v bucketu (vše pod anime/<slug>/epNNN/<q>/...)
     function buildDst({ slug, ep, q, name }) {
       const epStr = String(ep).padStart(3,'0');
       return `anime/${slug}/ep${epStr}/${q}/${name}`;
     }
 
-    // ---- Podepsání URL pro VIDEO a (volitelně) SUBS
     async function signUrls({ videoDst, vType, subsDst, sType }) {
-      console.debug('[signUrls] videoDst =', videoDst, '| subsDst =', subsDst);
-      if (!videoDst || typeof videoDst !== 'string' || !videoDst.trim()) {
-        throw new Error('internal: empty videoDst');
-      }
-      // VIDEO
+      if (!videoDst || !videoDst.trim()) throw new Error('internal: empty videoDst');
+
       const rV = await fetch('/upload/sign', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path: videoDst, contentType: vType || 'application/octet-stream' })
       });
       const jV = await rV.json().catch(()=>null);
       if (!rV.ok || !jV?.ok) throw new Error('sign_failed: ' + (jV?.error || `HTTP ${rV.status}`));
 
-      // SUBS (volitelné)
       let jS = null;
       if (subsDst) {
         const rS = await fetch('/upload/sign', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ path: subsDst, contentType: sType || 'application/x-subrip' })
         });
         jS = await rS.json().catch(()=>null);
         if (!rS.ok || !jS?.ok) throw new Error('sign_failed: ' + (jS?.error || `HTTP ${rS.status}`));
       }
-
       return {
         video: { put_url: jV.upload_url, public_url: jV.public_url, content_type: vType || 'application/octet-stream' },
         subs:  jS ? { put_url: jS.upload_url, public_url: jS.public_url, content_type: sType || 'application/x-subrip' } : null
@@ -267,21 +221,13 @@
         const xhr = new XMLHttpRequest();
         xhr.open('PUT', url);
         xhr.setRequestHeader('Content-Type', contentType || 'application/octet-stream');
-        xhr.upload.onprogress = (e) => {
-          if (e.lengthComputable && typeof onProgress === 'function') {
-            onProgress(e.loaded, e.total);
-          }
-        };
-        xhr.onload = () => {
-          if (xhr.status >= 200 && xhr.status < 300) resolve();
-          else reject(new Error(`PUT failed: ${xhr.status} ${xhr.responseText || ''}`));
-        };
+        xhr.upload.onprogress = (e) => { if (e.lengthComputable && onProgress) onProgress(e.loaded, e.total); };
+        xhr.onload  = () => { if (xhr.status>=200 && xhr.status<300) resolve(); else reject(new Error(`PUT failed: ${xhr.status} ${xhr.responseText||''}`)); };
         xhr.onerror = () => reject(new Error('network_error'));
         xhr.send(file);
       });
     }
 
-    // util: MIME podle přípony (fallback)
     function mimeFromExt(name){
       const n = (name||'').toLowerCase();
       if (n.endsWith('.mp4')) return 'video/mp4';
@@ -292,7 +238,6 @@
       return '';
     }
 
-    // Upload + progress (přímý PUT do GCS)
     btnUpload.addEventListener('click', async () => {
       const a = App.auth(); if (!chosenAnime) return;
       const ep = Number(selEp.value); const q = selQ.value;
@@ -312,7 +257,6 @@
       const videoOut = `${q}_${nextIndex}.${vExt}`;
       const subsOut  = s ? `${q}_${nextIndex}.srt` : null;
 
-      // typy + cílové cesty pro podpis
       const vType = v.type || mimeFromExt(v.name) || 'video/mp4';
       const sType = s ? 'application/x-subrip' : null;
       const videoDst = buildDst({ slug: chosenAnime.slug, ep, q, name: videoOut });
@@ -324,26 +268,21 @@
       hideSuccess(); msg.textContent='';
 
       try {
-        // 1) vyžádej Signed URL (pošle se { path, contentType })
         const signed = await signUrls({ videoDst, vType, subsDst, sType });
 
-        // 2) celkový progress
         const totalBytes = (v?.size||0) + (s?.size||0);
         let uploadedBytes = 0;
         const updOverall = (absLoaded) => {
           const pct = Math.round(((absLoaded) / (totalBytes || 1)) * 100);
-          barOverall.style.width = pct + '%';
-          pctOverall.textContent = pct + '%';
+          barOverall.style.width = pct + '%'; pctOverall.textContent = pct + '%';
         };
 
-        // 3) upload VIDEA
         await putWithProgress(signed.video.put_url, v, signed.video.content_type, (loaded, total) => {
           miniPV.style.width = Math.round((loaded/total)*100) + '%';
           updOverall(uploadedBytes + loaded);
         });
         uploadedBytes += v.size; updOverall(uploadedBytes);
 
-        // 4) upload SUBS (je-li)
         if (s && signed.subs) {
           await putWithProgress(signed.subs.put_url, s, signed.subs.content_type, (loaded, total) => {
             miniPS.style.width = Math.round((loaded/total)*100) + '%';
@@ -352,16 +291,7 @@
           uploadedBytes += s.size; updOverall(uploadedBytes);
         }
 
-        // 5) lokální záznam + UI
-        App.addUploadRecord({
-          slug: chosenAnime.slug,
-          episode: ep,
-          quality: q,
-          videoName: videoOut,
-          subsName: s ? subsOut : null,
-          user: App.auth().email,
-          ts: Date.now()
-        });
+        App.addUploadRecord({ slug: chosenAnime.slug, episode: ep, quality: q, videoName: videoOut, subsName: s ? subsOut : null, user: App.auth().email, ts: Date.now() });
 
         for (const opt of selQ.options){
           if (!opt.value) continue;
@@ -385,17 +315,14 @@
       }
     });
 
-    // AUTO-PŘEDVOLBA z indexu (zachováno)
     (async function preselectFromIndex(){
-      const slug = localStorage.getItem('preselect_anime');
-      if (!slug) return;
+      const slug = localStorage.getItem('preselect_anime'); if (!slug) return;
       localStorage.removeItem('preselect_anime');
       const a = App.auth(); if (!a.email) return;
       btnOpen.click();
       const wait = (ms)=>new Promise(r=>setTimeout(r,ms));
       for (let i=0;i<20;i++){ if (animeList && animeList.length) break; await wait(100); }
-      const found = animeList.find(x => x.slug === slug);
-      if (!found) return;
+      const found = animeList.find(x => x.slug === slug); if (!found) return;
       selAnime.value = slug; selAnime.dispatchEvent(new Event('change', {bubbles:true}));
     })();
   </script>
