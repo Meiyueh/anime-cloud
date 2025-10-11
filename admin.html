@@ -215,7 +215,13 @@
                   <span class="code">${u.videoName}</span>
                   ${u.subsName?`&nbsp;<span class="small">[${u.subsName}]</span>`:''}
                   &nbsp;<span class="small">(${new Date(u.ts).toLocaleString()})</span>
-                  <button class="btn danger inline" data-del data-slug="${u.slug}" data-ep="${u.episode}" data-q="${u.quality}" data-name="${u.videoName}">Smazat</button>
+                  <button class="btn danger inline"
+                          data-del
+                          data-slug="${u.slug}"
+                          data-ep="${u.episode}"
+                          data-q="${u.quality}"
+                          data-name="${u.videoName}"
+                          data-subs="${u.subsName || ''}">Smazat</button>
                 </li>`).join('');
               return `<details><summary>${q==='2160p'?'4K (2160p)':q} <span class="small">(${arr.length}/3)</span></summary><ul class="list-simple tree">${files||'<li class="small">Žádná data</li>'}</ul></details>`;
             }).join('');
@@ -239,17 +245,60 @@
       applyFilters();
 
       function wireDeleteButtons(){
+        const makeKey = (slug, ep, q, name) => {
+          const epStr = String(ep).padStart(3,'0');
+          // vše ukládáme pod anime/<slug>/epNNN/<q>/<soubor>
+          return `anime/${slug}/ep${epStr}/${q}/${name}`;
+        };
+      
         treeWrap.querySelectorAll('[data-del]').forEach(btn=>{
           btn.addEventListener('click', async ()=>{
-            const slug=btn.dataset.slug, ep=Number(btn.dataset.ep), q=btn.dataset.q, name=btn.dataset.name;
-            if (!confirm(`Smazat ${name}?`)) return;
+            const slug = btn.dataset.slug;
+            const ep   = Number(btn.dataset.ep);
+            const q    = btn.dataset.q;
+            const name = btn.dataset.name;
+            const srt  = (btn.dataset.subs || '').trim();
+      
+            if (!confirm(`Smazat ${name}${srt ? ' + ' + srt : ''}?`)) return;
+      
+            // 1) smaž v GCS (video + případně .srt)
             try{
-              await fetch(App.api('/delete'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({anime:slug,episode:ep,quality:q,videoName:name})});
-            }catch{}
+              const videoKey = makeKey(slug, ep, q, name);
+              const calls = [
+                fetch(App.api('/delete'), {
+                  method:'POST',
+                  headers:{'Content-Type':'application/json'},
+                  body: JSON.stringify({ path: videoKey })
+                })
+              ];
+              if (srt) {
+                const subsKey = makeKey(slug, ep, q, srt);
+                calls.push(fetch(App.api('/delete'), {
+                  method:'POST',
+                  headers:{'Content-Type':'application/json'},
+                  body: JSON.stringify({ path: subsKey })
+                }));
+              }
+      
+              const results = await Promise.all(calls);
+              const bad = results.find(r => !r.ok);
+              if (bad) {
+                const payload = await bad.json().catch(()=>null);
+                throw new Error(payload?.error || `HTTP ${bad.status}`);
+              }
+            }catch(e){
+              App.toast('Mazání na GCS selhalo: ' + (e.message || e), 'error');
+              return;
+            }
+      
+            // 2) smaž lokální záznam a obnov UI
             const ls = App.getUploads();
-            const idx = ls.findIndex(u=>u.slug===slug&&u.episode===ep&&u.quality===q&&u.videoName===name);
-            if(idx>=0){ ls.splice(idx,1); App.setUploads(ls); }
-            App.toast('Záznam smazán','ok');
+            const idx = ls.findIndex(u=>u.slug===slug && u.episode===ep && u.quality===q && u.videoName===name);
+            if (idx>=0){ ls.splice(idx,1); App.setUploads(ls); }
+      
+            App.toast('Soubor(y) smazán(y)','ok');
+      
+            // zachovej otevřené <details>
             const openKeys = Array.from(document.querySelectorAll('#treeWrap details[open] > summary')).map(s => s.textContent.trim());
             applyFilters();
             openKeys.forEach(key=>{
@@ -413,3 +462,4 @@
   </script>
 </body>
 </html>
+
