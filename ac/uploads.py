@@ -180,30 +180,138 @@ def _normalize_gcs_path(path_or_url: str, bucket_name: str) -> str:
     return s
 
 def handle_delete_file(handler):
+    """
+    Smaže jeden nebo více souborů z GCS (nebo lokální fallback).
+    Přijímané tvary payloadu:
+      - {"path": "anime/<slug>/epNNN/<q>/<soubor>"}
+      - {"paths": ["anime/...","anime/..."]}
+      - {"url": "https://storage.googleapis.com/<bucket>/anime/..."}  # z URL vytěženo jméno objektu
+      - {"public_url": "..."}                                         # dtto
+      - Legacy: {"anime":"one-piece","episode":45,"quality":"1080p","videoName":"1080p_1.mp4"} (+ volitelně "subsName")
+    Vrací JSON: { ok, deleted:[...], not_found:[...], errors:[{path,error}] }
+    """
     try:
         body = handler._read_body() or {}
-        raw = body.get("path") or body.get("url") or body.get("public_url") or body.get("src") or ""
-        path = _normalize_gcs_path(raw, BUCKET_NAME)
 
-        if not path:
-            return _json(handler, 400, {"ok": False, "error": "missing or invalid path"})
+        # --- nasbírej kandidáty ---
+        candidates = []
+
+        # path (string)
+        p = body.get("path")
+        if isinstance(p, str) and p.strip():
+            candidates.append(p.strip())
+
+        # paths (pole)
+        ps = body.get("paths")
+        if isinstance(ps, (list, tuple)):
+            for it in ps:
+                if isinstance(it, str) and it.strip():
+                    candidates.append(it.strip())
+
+        # url / public_url (stringy)
+        for k in ("url", "public_url"):
+            u = body.get(k)
+            if isinstance(u, str) and u.strip():
+                candidates.append(u.strip())
+
+        # legacy tvar (video)
+        slug = body.get("slug") or body.get("anime")
+        ep   = body.get("episode") or body.get("ep")
+        q    = body.get("quality") or body.get("q")
+        name = body.get("name") or body.get("videoName")
+        if slug and ep is not None and q and name:
+            candidates.append(f"anime/{slug}/ep{str(int(ep)).zfill(3)}/{q}/{name}")
+
+        # legacy tvar (subs)
+        subs = body.get("subs") or body.get("subsName")
+        if slug and ep is not None and q and subs:
+            candidates.append(f"anime/{slug}/ep{str(int(ep)).zfill(3)}/{q}/{subs}")
+
+        # --- normalizace: URL -> object name ---
+        from urllib.parse import urlparse, unquote
+        norm = []
+        for x in candidates:
+            s = (x or "").strip()
+            if not s:
+                continue
+            if s.startswith(("http://", "https://")):
+                u = urlparse(s)
+                # očekáváme tvar /<bucket>/<key...>
+                parts = u.path.split("/", 2)  # ["", "bucket", "key..."]
+                if len(parts) >= 3 and parts[2]:
+                    key = parts[2].lstrip("/")
+                    norm.append(unquote(key))
+                else:
+                    # fallback: vezmi celé path bez leading /
+                    key = u.path.lstrip("/")
+                    if key:
+                        norm.append(unquote(key))
+            elif s.startswith("gs://"):
+                after = s[5:]  # po "gs://"
+                idx = after.find("/")
+                key = after[idx+1:] if idx != -1 else ""
+                key = key.lstrip("/")
+                if key:
+                    norm.append(unquote(key))
+            else:
+                norm.append(s.lstrip("/"))
+
+        # deduplikace
+        seen = set()
+        paths = [p for p in norm if not (p in seen or seen.add(p))]
+
+        if not paths:
+            return _json(handler, 400, {"ok": False, "error": "missing path"})
 
         bucket = _get_bucket()
+        deleted, not_found, errors = [], [], []
+
         if bucket:
             try:
-                blob = bucket.blob(path)
-                blob.delete(if_generation_match=None)  # idempotentní
-                return _json(handler, 200, {"ok": True, "deleted": path, "scope": "gcs"})
-            except Exception as e:
-                # Pokud nemáš storage.objects.delete právo, vrátí 403 — řekneme to nahlas
-                return _json(handler, 400, {"ok": False, "error": f"gcs_delete_failed: {e}", "path": path})
+                from google.api_core.exceptions import NotFound
+            except Exception:
+                class NotFound(Exception):  # kdyby import selhal, aspoň fallback
+                    pass
 
-        # --- Lokální fallback (dev režim)
+            for key in paths:
+                try:
+                    blob = bucket.blob(key)
+                    blob.delete(if_generation_match=None)
+                    deleted.append(key)
+                except NotFound:
+                    not_found.append(key)
+                except Exception as e:
+                    errors.append({"path": key, "error": str(e)})
+
+            code = 200 if not errors else 207
+            return _json(handler, code, {
+                "ok": len(errors) == 0,
+                "deleted": deleted,
+                "not_found": not_found,
+                "errors": errors
+            })
+
+        # --- Lokální fallback (pokud není GCS bucket k dispozici) ---
         root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-        dst = os.path.abspath(os.path.join(root, path))
-        if os.path.exists(dst):
-            os.remove(dst)
-        return _json(handler, 200, {"ok": True, "deleted": path, "scope": "local"})
+        for key in paths:
+            try:
+                dst = os.path.abspath(os.path.join(root, key))
+                if os.path.exists(dst):
+                    os.remove(dst)
+                    deleted.append(key)
+                else:
+                    not_found.append(key)
+            except Exception as e:
+                errors.append({"path": key, "error": str(e)})
+
+        code = 200 if not errors else 207
+        return _json(handler, code, {
+            "ok": len(errors) == 0,
+            "deleted": deleted,
+            "not_found": not_found,
+            "errors": errors
+        })
+
     except Exception as e:
         traceback.print_exc()
         return _json(handler, 400, {"ok": False, "error": str(e)})
