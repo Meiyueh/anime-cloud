@@ -297,37 +297,37 @@
       const a = App.auth(); if (!chosenAnime) return;
       const ep = Number(selEp.value); const q = selQ.value;
       const v = fileVideo.files[0]; const s = fileSubs.files[0]; const isAdmin = (a.role === 'admin');
-
+    
       if (!selAnime.value || !ep || !q || !v) return App.showMsg(msg, 'Vyber anime, díl, kvalitu a video.', 'error');
       if (!isAdmin){
         if (!s) return App.showMsg(msg, 'Titulky (.srt) jsou povinné.', 'error');
         if (!s.name.toLowerCase().endsWith('.srt')) return App.showMsg(msg, 'Titulky musí být .srt.', 'error');
       }
-
+    
       const currentQ = App.getUploadCountByQuality(chosenAnime.slug, ep, q);
       if (currentQ >= 3) return App.showMsg(msg, `Limit pro ${q} je plný (3/3).`, 'error');
       const nextIndex = currentQ + 1;
-
+    
       const vExt = App.extOrDefault(v.name, 'mp4');
       const videoOut = `${q}_${nextIndex}.${vExt}`;
       const subsOut  = s ? `${q}_${nextIndex}.srt` : null;
-
-      // ✨ typy + cílové cesty pro podpis
+    
+      // typy + cílové cesty pro podpis
       const vType = v.type || mimeFromExt(v.name) || 'video/mp4';
       const sType = s ? 'application/x-subrip' : null;
       const videoDst = buildDst({ slug: chosenAnime.slug, ep, q, name: videoOut, kind: 'video' });
       const subsDst  = s ? buildDst({ slug: chosenAnime.slug, ep, q, name: subsOut,  kind: 'subs'  }) : null;
-
+    
       overall.classList.remove('hidden');
       barOverall.style.width='0%'; pctOverall.textContent='0%';
       miniPV.style.width='0%'; miniPS.style.width='0%';
       hideSuccess(); msg.textContent='';
-
+    
       try {
-        // ✨ vyžádat Signed URL přes { path, contentType }
+        // 1) vyžádej Signed URL přes { path, contentType }
         const signed = await signUrls({ videoDst, vType, subsDst, sType });
-
-        // celkový progres (správný výpočet)
+    
+        // 2) celkový progress
         const totalBytes = (v?.size||0) + (s?.size||0);
         let uploadedBytes = 0;
         const updOverall = (absLoaded) => {
@@ -335,15 +335,15 @@
           barOverall.style.width = pct + '%';
           pctOverall.textContent = pct + '%';
         };
-
-        // VIDEO upload
+    
+        // 3) upload VIDEA
         await putWithProgress(signed.video.put_url, v, signed.video.content_type, (loaded, total) => {
           miniPV.style.width = Math.round((loaded/total)*100) + '%';
           updOverall(uploadedBytes + loaded);
         });
         uploadedBytes += v.size; updOverall(uploadedBytes);
-
-        // SUBS upload (volitelně)
+    
+        // 4) upload SUBS (je-li)
         if (s && signed.subs) {
           await putWithProgress(signed.subs.put_url, s, signed.subs.content_type, (loaded, total) => {
             miniPS.style.width = Math.round((loaded/total)*100) + '%';
@@ -351,10 +351,18 @@
           });
           uploadedBytes += s.size; updOverall(uploadedBytes);
         }
-
-        // záznam o uploadu + refresh počítadel
-        App.addUploadRecord({ slug: chosenAnime.slug, episode: ep, quality: q, videoName: videoOut, subsName: s ? subsOut : null, user: a.email, ts: Date.now() });
-
+    
+        // 5) lokální záznam + UI
+        App.addUploadRecord({
+          slug: chosenAnime.slug,
+          episode: ep,
+          quality: q,
+          videoName: videoOut,
+          subsName: s ? subsOut : null,
+          user: App.auth().email,
+          ts: Date.now()
+        });
+    
         for (const opt of selQ.options){
           if (!opt.value) continue;
           const c = App.getUploadCountByQuality(chosenAnime.slug, ep, opt.value);
@@ -362,11 +370,12 @@
           if (c>=3){ opt.disabled=true; opt.textContent = `${base} (FULL)`; }
           else { opt.textContent = `${base} (${c}/3)`; }
         }
-
-        rowSubmit.style.display='none'; fileVideo.value=''; fileSubs.value='';
+    
+        rowSubmit.style.display='none';
+        fileVideo.value=''; fileSubs.value='';
         videoInfo.textContent='—'; subsInfo.textContent='—';
         showSuccess(`✅ Nahráno: ${chosenAnime.title} · díl ${ep} · ${q} (${videoOut})`);
-
+    
         barOverall.style.width='100%'; pctOverall.textContent='100%';
         setTimeout(()=>overall.classList.add('hidden'), 900);
       } catch (e) {
@@ -392,3 +401,4 @@
   </script>
 </body>
 </html>
+
