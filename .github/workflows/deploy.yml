@@ -13,14 +13,13 @@ jobs:
       - name: Checkout (not strictly needed, but fine)
         uses: actions/checkout@v4
 
-      # Hlavní deploy krok přes SSH
       - name: SSH to server and deploy
         uses: appleboy/ssh-action@v1.2.0
         with:
-          host: ${{ secrets.SSH_HOST }}      # např. 80.211.223.9
-          username: ${{ secrets.SSH_USER }}  # např. root
-          key: ${{ secrets.SSH_KEY }}        # celý PRIVATE KEY = blok začínající "-----BEGIN OPENSSH PRIVATE KEY-----"
-          # port: ${{ secrets.SSH_PORT }}    # pokud nepoužíváš 22, odkomentuj a nastav secret
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          # port: ${{ secrets.SSH_PORT }}
           script: |
             set -euo pipefail
 
@@ -30,12 +29,11 @@ jobs:
 
             echo "==> Pull latest code"
             cd /root/anime-cloud
-            # Pokud repozitář někdy ztratí remote, přidej si ho trvale: git remote add origin https://github.com/Meiyueh/anime-cloud.git
             git fetch --all
             git checkout main || true
             git reset --hard origin/main
 
-            echo "==> Ensure Python venv & deps"
+            echo "==> Ensure Python venv & deps (/opt/anime-cloud/.venv)"
             if [ ! -d /opt/anime-cloud/.venv ]; then
               mkdir -p /opt/anime-cloud
               python3 -m venv /opt/anime-cloud/.venv
@@ -43,14 +41,16 @@ jobs:
             /opt/anime-cloud/.venv/bin/python -m pip install -U pip
             /opt/anime-cloud/.venv/bin/pip install -r requirements.txt
 
-            echo "==> Check secrets (.env) & GCS key"
-            if [ ! -f /root/anime-cloud/.env ]; then
-              echo "WARNING: /root/anime-cloud/.env is missing (SMTP apod.); continuing..."
+            echo "==> Check server-side secrets in /etc/anime-cloud"
+            if [ ! -f /etc/anime-cloud/gcs-key.json ]; then
+              echo "ERROR: /etc/anime-cloud/gcs-key.json missing!"; exit 2
             fi
-            if [ ! -f /root/anime-cloud/gcs-key.json ]; then
-              echo "ERROR: /root/anime-cloud/gcs-key.json missing!"; exit 2
+            # .env je volitelný (EnvironmentFile=-...), jen upozorníme:
+            if [ ! -f /etc/anime-cloud/.env ]; then
+              echo "WARN: /etc/anime-cloud/.env not found (service may rely on unit env only)"
             fi
-            chmod 600 /root/anime-cloud/gcs-key.json || true
+            chmod 600 /etc/anime-cloud/gcs-key.json || true
+            chmod 600 /etc/anime-cloud/.env || true
 
             echo "==> Restart service"
             systemctl daemon-reload || true
