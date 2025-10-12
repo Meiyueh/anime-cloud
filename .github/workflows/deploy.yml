@@ -36,12 +36,12 @@ jobs:
             git reset --hard origin/main
 
             echo "==> Ensure Python venv & deps"
-            if [ ! -d /opt/anime-cloud/.venv ]; then
-              mkdir -p /opt/anime-cloud
-              python3 -m venv /opt/anime-cloud/.venv
+            if [ ! -d /opt/animecloud/venv ]; then
+              mkdir -p /opt/animecloud/venv
+              python3 -m venv /opt/animecloud/venv
             fi
-            /opt/anime-cloud/.venv/bin/python -m pip install -U pip
-            /opt/anime-cloud/.venv/bin/pip install -r requirements.txt
+            /opt/animecloud/venv/bin/python -m pip install -U pip
+            /opt/animecloud/venv/bin/pip install -r requirements.txt
 
             echo "==> Check secrets (.env) & GCS key"
             if [ ! -f /root/anime-cloud/.env ]; then
